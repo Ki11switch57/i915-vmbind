@@ -277,6 +277,7 @@ skip_rb_insert:
 	spin_unlock(&obj->vma.lock);
 	mutex_unlock(&vm->mutex);
 
+	INIT_LIST_HEAD(&vma->vm_bind_link);
 	return vma;
 
 err_unlock:
