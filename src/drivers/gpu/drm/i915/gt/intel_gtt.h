@@ -290,6 +290,10 @@ struct i915_address_space {
 	struct list_head vm_bound_list;
 	/** @va: tree of persistent vmas */
 	struct rb_root_cached va;
+	/** @non_priv_vm_bind_list: list of non-private object mappings */
+	struct list_head non_priv_vm_bind_list;
+	/** @root_obj: root object for dma-resv sharing by private objects */
+	struct drm_i915_gem_object *root_obj;
 
 	/* Global GTT */
 	bool is_ggtt:1;
