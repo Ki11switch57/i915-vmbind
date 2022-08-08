@@ -12,6 +12,7 @@
 
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
+#include "gem/i915_gem_vm_bind.h"
 #include "i915_reg.h"
 #include "i915_trace.h"
 #include "i915_utils.h"
@@ -210,6 +211,8 @@ int i915_vm_lock_objects(struct i915_address_space *vm,
 void i915_address_space_fini(struct i915_address_space *vm)
 {
 	drm_mm_takedown(&vm->mm);
+	GEM_BUG_ON(!RB_EMPTY_ROOT(&vm->va.rb_root));
+	mutex_destroy(&vm->vm_bind_lock);
 }
 
 /**
@@ -235,6 +238,8 @@ static void __i915_vm_release(struct work_struct *work)
 {
 	struct i915_address_space *vm =
 		container_of(work, struct i915_address_space, release_work);
+
+	i915_gem_vm_unbind_all(vm);
 
 	__i915_vm_close(vm);
 
@@ -312,6 +317,11 @@ void i915_address_space_init(struct i915_address_space *vm, int subclass)
 
 	INIT_LIST_HEAD(&vm->bound_list);
 	INIT_LIST_HEAD(&vm->unbound_list);
+
+	vm->va = RB_ROOT_CACHED;
+	INIT_LIST_HEAD(&vm->vm_bind_list);
+	INIT_LIST_HEAD(&vm->vm_bound_list);
+	mutex_init(&vm->vm_bind_lock);
 }
 
 void *__px_vaddr(struct drm_i915_gem_object *p)
