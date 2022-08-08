@@ -282,6 +282,15 @@ struct i915_address_space {
 	 */
 	struct list_head unbound_list;
 
+	/** @vm_bind_lock: Mutex to protect @vm_bind_list and @vm_bound_list */
+	struct mutex vm_bind_lock;
+	/** @vm_bind_list: List of vm_binding in process */
+	struct list_head vm_bind_list;
+	/** @vm_bound_list: List of vm_binding completed */
+	struct list_head vm_bound_list;
+	/** @va: tree of persistent vmas */
+	struct rb_root_cached va;
+
 	/* Global GTT */
 	bool is_ggtt:1;
 
