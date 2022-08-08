@@ -31,6 +31,7 @@
 #include "gem/i915_gem_lmem.h"
 #include "gem/i915_gem_object_frontbuffer.h"
 #include "gem/i915_gem_tiling.h"
+#include "gem/i915_gem_vm_bind.h"
 #include "gt/intel_engine.h"
 #include "gt/intel_engine_heartbeat.h"
 #include "gt/intel_gt.h"
@@ -1650,6 +1651,9 @@ err_vma_res:
 	i915_vma_resource_free(vma_res);
 err_fence:
 	if (work) {
+		if (i915_vma_is_persistent(vma))
+			i915_vm_bind_signal_fence(vma, &work->base.dma);
+
 		/*
 		 * When pinning VMA to GGTT on CHV or BXT with VTD enabled,
 		 * commit VMA binding asynchronously to avoid risk of lock
