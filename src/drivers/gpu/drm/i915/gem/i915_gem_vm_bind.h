@@ -8,6 +8,7 @@
 
 #include <linux/types.h>
 
+struct dma_fence;
 struct drm_device;
 struct drm_file;
 struct i915_address_space;
@@ -22,5 +23,8 @@ int i915_gem_vm_unbind_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file);
 
 void i915_gem_vm_unbind_all(struct i915_address_space *vm);
+
+void i915_vm_bind_signal_fence(struct i915_vma *vma,
+			       struct dma_fence * const fence);
 
 #endif /* __I915_GEM_VM_BIND_H */
