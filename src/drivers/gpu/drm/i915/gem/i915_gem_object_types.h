@@ -250,6 +250,12 @@ struct drm_i915_gem_object {
 
 	const struct drm_i915_gem_object_ops *ops;
 
+	/**
+	 * @priv_root: pointer to vm->root_obj if object is private,
+	 * NULL otherwise.
+	 */
+	struct drm_i915_gem_object *priv_root;
+
 	struct {
 		/**
 		 * @vma.lock: protect the list/tree of vmas
