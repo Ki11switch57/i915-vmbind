@@ -13,6 +13,7 @@
 #include "pxp/intel_pxp.h"
 
 #include "i915_drv.h"
+#include "i915_gem_context.h"
 #include "i915_gem_create.h"
 #include "i915_trace.h"
 #include "i915_user_extensions.h"
@@ -253,6 +254,7 @@ struct create_ext {
 	unsigned int placement_mask;
 	unsigned long flags;
 	unsigned int pat_index;
+	u32 vm_id;
 };
 
 static void repr_placements(char *buf, size_t size,
@@ -432,10 +434,33 @@ static int ext_set_pat(struct i915_user_extension __user *base, void *data)
 	return 0;
 }
 
+static int ext_set_vm_private(struct i915_user_extension __user *base,
+			      void *data)
+{
+	struct drm_i915_gem_create_ext_vm_private ext;
+	struct create_ext *ext_data = data;
+
+	if (copy_from_user(&ext, base, sizeof(ext)))
+		return -EFAULT;
+
+	/* Reserved fields must be 0 */
+	if (ext.rsvd)
+		return -EINVAL;
+
+	/* vm_id 0 is reserved */
+	if (!ext.vm_id)
+		return -ENOENT;
+
+	ext_data->vm_id = ext.vm_id;
+
+	return 0;
+}
+
 static const i915_user_extension_fn create_extensions[] = {
 	[I915_GEM_CREATE_EXT_MEMORY_REGIONS] = ext_set_placements,
 	[I915_GEM_CREATE_EXT_PROTECTED_CONTENT] = ext_set_protected,
 	[I915_GEM_CREATE_EXT_SET_PAT] = ext_set_pat,
+	[I915_GEM_CREATE_EXT_VM_PRIVATE] = ext_set_vm_private,
 };
 
 #define PAT_INDEX_NOT_SET	0xffff
@@ -452,6 +477,7 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 	struct drm_i915_private *i915 = to_i915(dev);
 	struct drm_i915_gem_create_ext *args = data;
 	struct create_ext ext_data = { .i915 = i915 };
+	struct i915_address_space *vm = NULL;
 	struct drm_i915_gem_object *obj;
 	int ret;
 
@@ -465,6 +491,17 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 				   &ext_data);
 	if (ret)
 		return ret;
+
+	if (ext_data.vm_id) {
+		vm = i915_gem_vm_lookup(file->driver_priv, ext_data.vm_id);
+		if (unlikely(!vm))
+			return -ENOENT;
+
+		if (!i915_gem_vm_is_vm_bind_mode(vm)) {
+			ret = -EINVAL;
+			goto vm_put;
+		}
+	}
 
 	if (!ext_data.n_placements) {
 		ext_data.placements[0] =
@@ -492,8 +529,16 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 						ext_data.placements,
 						ext_data.n_placements,
 						ext_data.flags);
-	if (IS_ERR(obj))
-		return PTR_ERR(obj);
+	if (IS_ERR(obj)) {
+		ret = PTR_ERR(obj);
+		goto vm_put;
+	}
+
+	if (vm) {
+		obj->base.resv = vm->root_obj->base.resv;
+		obj->priv_root = i915_gem_object_get(vm->root_obj);
+		i915_vm_put(vm);
+	}
 
 	if (ext_data.pat_index != PAT_INDEX_NOT_SET) {
 		i915_gem_object_set_pat_index(obj, ext_data.pat_index);
@@ -502,4 +547,9 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 	}
 
 	return i915_gem_publish(obj, file, &args->size, &args->handle);
+vm_put:
+	if (vm)
+		i915_vm_put(vm);
+
+	return ret;
 }
