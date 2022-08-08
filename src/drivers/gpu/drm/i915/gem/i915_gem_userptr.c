@@ -59,7 +59,29 @@ static bool i915_gem_userptr_invalidate(struct mmu_interval_notifier *mni,
 					const struct mmu_notifier_range *range,
 					unsigned long cur_seq)
 {
+	struct drm_i915_gem_object *obj = container_of(mni, struct drm_i915_gem_object, userptr.notifier);
+	struct i915_vma *vma;
+
 	mmu_interval_set_seq(mni, cur_seq);
+
+	/**
+	 * Add persistent vmas into userptr_invalidated list for relookup
+	 * and revalidation.
+	 */
+	spin_lock(&obj->vma.lock);
+	list_for_each_entry(vma, &obj->vma.list, obj_link) {
+		if (!i915_vma_is_persistent(vma))
+			continue;
+
+		spin_lock(&vma->vm->userptr_invalidated_lock);
+		if (list_empty(&vma->userptr_invalidated_link) &&
+		    !i915_vma_is_purged(vma))
+			list_add_tail(&vma->userptr_invalidated_link,
+				      &vma->vm->userptr_invalidated_list);
+		spin_unlock(&vma->vm->userptr_invalidated_lock);
+	}
+	spin_unlock(&obj->vma.lock);
+
 	return true;
 }
 
