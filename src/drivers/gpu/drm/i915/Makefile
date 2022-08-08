@@ -161,6 +161,7 @@ gem-y += \
 	gem/i915_gem_domain.o \
 	gem/i915_gem_execbuffer_common.o \
 	gem/i915_gem_execbuffer.o \
+	gem/i915_gem_execbuffer3.o \
 	gem/i915_gem_internal.o \
 	gem/i915_gem_lmem.o \
 	gem/i915_gem_mman.o \
