@@ -245,6 +245,20 @@ struct i915_vma {
 	/** This object's place on the active/inactive lists */
 	struct list_head vm_link;
 
+	/** @vm_bind_link: node for the vm_bind related lists of vm */
+	struct list_head vm_bind_link;
+
+	/** Interval tree structures for persistent vma */
+
+	/** @rb: node for the interval tree of vm for persistent vmas */
+	struct rb_node rb;
+	/** @start: start endpoint of the rb node */
+	u64 start;
+	/** @last: Last endpoint of the rb node */
+	u64 last;
+	/** @__subtree_last: last in subtree */
+	u64 __subtree_last;
+
 	struct list_head obj_link; /* Link in the object's VMA list */
 	struct rb_node obj_node;
 
