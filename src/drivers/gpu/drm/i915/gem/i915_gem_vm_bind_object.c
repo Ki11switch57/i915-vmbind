@@ -8,6 +8,7 @@
 #include <linux/interval_tree_generic.h>
 
 #include <drm/drm_print.h>
+#include <drm/drm_syncobj.h>
 
 #include "gem/i915_gem_context.h"
 #include "gem/i915_gem_vm_bind.h"
@@ -101,6 +102,77 @@ static void i915_gem_vm_bind_remove(struct i915_vma *vma, bool release_obj)
 	/* Release object */
 	if (release_obj)
 		i915_gem_object_put(vma->obj);
+}
+
+static int i915_vm_bind_add_fence(struct drm_file *file, struct i915_vma *vma,
+				  u32 handle, u64 point)
+{
+	struct drm_syncobj *syncobj;
+
+	syncobj = drm_syncobj_find(file, handle);
+	if (!syncobj) {
+		drm_dbg(&vma->vm->i915->drm,
+			"Invalid syncobj handle provided\n");
+		return -ENOENT;
+	}
+
+	/*
+	 * For timeline syncobjs we need to preallocate chains for
+	 * later signaling.
+	 */
+	if (point) {
+		vma->vm_bind_fence.chain_fence = dma_fence_chain_alloc();
+		if (!vma->vm_bind_fence.chain_fence) {
+			drm_syncobj_put(syncobj);
+			return -ENOMEM;
+		}
+	} else {
+		vma->vm_bind_fence.chain_fence = NULL;
+	}
+	vma->vm_bind_fence.syncobj = syncobj;
+	vma->vm_bind_fence.value = point;
+
+	return 0;
+}
+
+static void i915_vm_bind_put_fence(struct i915_vma *vma)
+{
+	if (!vma->vm_bind_fence.syncobj)
+		return;
+
+	drm_syncobj_put(vma->vm_bind_fence.syncobj);
+	dma_fence_chain_free(vma->vm_bind_fence.chain_fence);
+	vma->vm_bind_fence.syncobj = NULL;
+}
+
+/**
+ * i915_vm_bind_signal_fence() - Add fence to vm_bind syncobj
+ * @vma: vma mapping requiring signaling
+ * @fence: fence to be added
+ *
+ * Associate specified @fence with the @vma's syncobj to be
+ * signaled after the @fence work completes.
+ */
+void i915_vm_bind_signal_fence(struct i915_vma *vma,
+			       struct dma_fence * const fence)
+{
+	struct drm_syncobj *syncobj = vma->vm_bind_fence.syncobj;
+
+	if (!syncobj)
+		return;
+
+	if (vma->vm_bind_fence.chain_fence) {
+		drm_syncobj_add_point(syncobj,
+				      vma->vm_bind_fence.chain_fence,
+				      fence, vma->vm_bind_fence.value);
+		/*
+		 * The chain's ownership is transferred to the
+		 * timeline.
+		 */
+		vma->vm_bind_fence.chain_fence = NULL;
+	} else {
+		drm_syncobj_replace_fence(syncobj, fence);
+	}
 }
 
 static int i915_gem_vm_unbind_vma(struct i915_address_space *vm,
@@ -208,6 +280,11 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	if (!va->length || !IS_ALIGNED(va->start, I915_GTT_PAGE_SIZE))
 		ret = -EINVAL;
 
+	/* In fences are not supported */
+	if ((va->fence.flags & I915_TIMELINE_FENCE_WAIT) ||
+	    (va->fence.flags & __I915_TIMELINE_FENCE_UNKNOWN_FLAGS))
+		ret = -EINVAL;
+
 	obj = i915_gem_object_lookup(file, va->handle);
 	if (!obj)
 		return -ENOENT;
@@ -240,6 +317,13 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		goto unlock_vm;
 	}
 
+	if (va->fence.flags & I915_TIMELINE_FENCE_SIGNAL) {
+		ret = i915_vm_bind_add_fence(file, vma, va->fence.handle,
+					     va->fence.value);
+		if (ret)
+			goto put_vma;
+	}
+
 	pin_flags = va->start | PIN_OFFSET_FIXED | PIN_USER |
 		    PIN_VALIDATE | PIN_NOEVICT;
 
@@ -252,10 +336,12 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		if (ret)
 			continue;
 
-		/* Wait for bind to complete */
-		ret = i915_vma_wait_for_bind(vma);
-		if (ret)
-			continue;
+		/* If out fence is not requested, wait for bind to complete */
+		if (!(va->fence.flags & I915_TIMELINE_FENCE_SIGNAL)) {
+			ret = i915_vma_wait_for_bind(vma);
+			if (ret)
+				continue;
+		}
 
 		list_add_tail(&vma->vm_bind_link, &vm->vm_bound_list);
 		i915_vm_bind_it_insert(vma, &vm->va);
@@ -267,6 +353,9 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		i915_gem_object_get(vma->obj);
 	}
 
+	if (va->fence.flags & I915_TIMELINE_FENCE_SIGNAL)
+		i915_vm_bind_put_fence(vma);
+put_vma:
 	if (ret)
 		i915_vma_destroy(vma);
 unlock_vm:
