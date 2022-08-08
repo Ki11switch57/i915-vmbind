@@ -911,6 +911,10 @@ static struct i915_vma *eb_lookup_vma(struct i915_execbuffer *eb, u32 handle)
 		if (unlikely(!obj))
 			return ERR_PTR(-ENOENT);
 
+		/* VM private objects are not supported here */
+		if (obj->priv_root)
+			return ERR_PTR(-EINVAL);
+
 		/*
 		 * If the user has opted-in for protected-object tracking, make
 		 * sure the object encryption can be used.
