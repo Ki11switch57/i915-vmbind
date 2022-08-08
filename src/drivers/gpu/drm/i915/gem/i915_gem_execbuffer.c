@@ -827,6 +827,11 @@ static int eb_select_context(struct i915_execbuffer *eb)
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
 
+	if (ctx->vm && i915_gem_vm_is_vm_bind_mode(ctx->vm)) {
+		i915_gem_context_put(ctx);
+		return -EOPNOTSUPP;
+	}
+
 	eb->gem_context = ctx;
 	if (i915_gem_context_has_full_ppgtt(ctx))
 		eb->invalid_flags |= EXEC_OBJECT_NEEDS_GTT;
