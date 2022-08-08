@@ -87,6 +87,7 @@ static void i915_gem_vm_bind_remove(struct i915_vma *vma, bool release_obj)
 	lockdep_assert_held(&vma->vm->vm_bind_lock);
 
 	list_del_init(&vma->vm_bind_link);
+	list_del_init(&vma->non_priv_vm_bind_link);
 	i915_vm_bind_it_remove(vma, &vma->vm->va);
 
 	/* Release object */
@@ -216,6 +217,11 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 	if (ret)
 		goto put_obj;
 
+	if (obj->priv_root && obj->priv_root != vm->root_obj) {
+		ret = -EINVAL;
+		goto put_obj;
+	}
+
 	ret = mutex_lock_interruptible(&vm->vm_bind_lock);
 	if (ret)
 		goto put_obj;
@@ -245,6 +251,9 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 
 		list_add_tail(&vma->vm_bind_link, &vm->vm_bound_list);
 		i915_vm_bind_it_insert(vma, &vm->va);
+		if (!obj->priv_root)
+			list_add_tail(&vma->non_priv_vm_bind_link,
+				      &vm->non_priv_vm_bind_list);
 
 		/* Hold object reference until vm_unbind */
 		i915_gem_object_get(vma->obj);
