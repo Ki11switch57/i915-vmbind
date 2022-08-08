@@ -282,6 +282,7 @@ skip_rb_insert:
 	INIT_LIST_HEAD(&vma->vm_bind_link);
 	INIT_LIST_HEAD(&vma->non_priv_vm_bind_link);
 	INIT_LIST_HEAD(&vma->vm_rebind_link);
+	INIT_LIST_HEAD(&vma->userptr_invalidated_link);
 	return vma;
 
 err_unlock:
