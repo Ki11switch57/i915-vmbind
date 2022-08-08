@@ -145,6 +145,9 @@ void __i915_gem_object_fini(struct drm_i915_gem_object *obj)
 {
 	mutex_destroy(&obj->mm.get_page.lock);
 	mutex_destroy(&obj->mm.get_dma_page.lock);
+
+	if (obj->priv_root)
+		i915_gem_object_put(obj->priv_root);
 }
 
 /**
