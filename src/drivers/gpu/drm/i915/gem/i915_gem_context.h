@@ -138,6 +138,21 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
 int i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
 				       struct drm_file *file);
 
+/**
+ * i915_gem_vm_is_vm_bind_mode() - Check if address space is in vm_bind mode
+ * @vm: the address space
+ *
+ * Returns:
+ * true: @vm is in vm_bind mode; allows only vm_bind method of binding.
+ * false: @vm is not in vm_bind mode; allows only legacy execbuff method
+ *        of binding.
+ */
+static inline bool i915_gem_vm_is_vm_bind_mode(struct i915_address_space *vm)
+{
+	/* No support to enable vm_bind mode yet */
+	return false;
+}
+
 struct i915_address_space *
 i915_gem_vm_lookup(struct drm_i915_file_private *file_priv, u32 id);
 
