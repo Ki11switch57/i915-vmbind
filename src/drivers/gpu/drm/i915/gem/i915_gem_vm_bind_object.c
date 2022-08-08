@@ -307,6 +307,12 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		goto put_obj;
 	}
 
+	if (i915_gem_object_is_userptr(obj)) {
+		ret = i915_gem_object_userptr_submit_init(obj);
+		if (ret)
+			goto put_obj;
+	}
+
 	ret = mutex_lock_interruptible(&vm->vm_bind_lock);
 	if (ret)
 		goto put_obj;
@@ -336,6 +342,13 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 		if (ret)
 			continue;
 
+#ifdef CONFIG_MMU_NOTIFIER
+		if (i915_gem_object_is_userptr(obj)) {
+			ret = i915_gem_object_userptr_submit_done(obj);
+			if (ret)
+				continue;
+		}
+#endif
 		/* If out fence is not requested, wait for bind to complete */
 		if (!(va->fence.flags & I915_TIMELINE_FENCE_SIGNAL)) {
 			ret = i915_vma_wait_for_bind(vma);
