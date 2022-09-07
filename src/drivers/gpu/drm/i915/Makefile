@@ -145,6 +145,7 @@ gem-y += \
 	gem/i915_gem_create.o \
 	gem/i915_gem_dmabuf.o \
 	gem/i915_gem_domain.o \
+	gem/i915_gem_execbuffer_common.o \
 	gem/i915_gem_execbuffer.o \
 	gem/i915_gem_internal.o \
 	gem/i915_gem_lmem.o \
