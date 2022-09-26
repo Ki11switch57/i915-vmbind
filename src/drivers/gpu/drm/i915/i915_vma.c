@@ -38,6 +38,7 @@
 #include "gt/intel_gt_requests.h"
 #include "gt/intel_tlb.h"
 
+#include "i915_config.h"
 #include "i915_drv.h"
 #include "i915_gem_evict.h"
 #include "i915_sw_fence_work.h"
@@ -454,6 +455,24 @@ int i915_vma_wait_for_bind(struct i915_vma *vma)
 	}
 
 	return err;
+}
+
+/**
+ * i915_vma_sync() - Wait for the vma to be idle
+ * @vma: vma to be tested
+ *
+ * Returns 0 on success and error code on failure
+ */
+int i915_vma_sync(struct i915_vma *vma)
+{
+	int ret;
+
+	/* Wait for the asynchronous bindings and pending GPU reads */
+	ret = i915_active_wait(&vma->active);
+	if (ret || !i915_vma_is_persistent(vma) || i915_vma_is_purged(vma))
+		return ret;
+
+	return i915_vm_sync(vma->vm);
 }
 
 #if IS_ENABLED(CONFIG_DRM_I915_DEBUG_GEM)
@@ -2017,6 +2036,8 @@ int _i915_vma_move_to_active(struct i915_vma *vma,
 	int err;
 
 	assert_object_held(obj);
+	if (i915_vma_is_persistent(vma))
+		return -EINVAL;
 
 	GEM_BUG_ON(!vma->pages);
 
@@ -2230,6 +2251,14 @@ static struct dma_fence *__i915_vma_unbind_async(struct i915_vma *vma)
 				       I915_ACTIVE_AWAIT_ACTIVE) < 0) {
 		return ERR_PTR(-EBUSY);
 	}
+
+	if (i915_vma_is_persistent(vma) && !i915_vma_is_purged(vma) &&
+	    __i915_sw_fence_await_reservation(&vma->resource->chain,
+					      vma->vm->root_obj->base.resv,
+					      DMA_RESV_USAGE_BOOKKEEP,
+					      i915_fence_timeout(vma->vm->i915),
+					      GFP_NOWAIT | __GFP_NOWARN) < 0)
+		return ERR_PTR(-EBUSY);
 
 	fence = __i915_vma_evict(vma, true);
 
