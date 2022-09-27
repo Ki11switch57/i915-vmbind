@@ -8,6 +8,8 @@
 
 #include <linux/types.h>
 
+#include "intel_wakeref.h"
+
 struct dma_fence;
 struct dma_fence_chain;
 struct drm_file;
@@ -42,8 +44,10 @@ struct eb_fence {
 int i915_eb_pin_engine(struct intel_context *ce, struct i915_gem_ww_ctx *ww,
 		       bool throttle, bool nonblock);
 void i915_eb_unpin_engine(struct intel_context *ce);
-int i915_eb_select_engine(struct intel_context *ce);
-void i915_eb_put_engine(struct intel_context *ce);
+int i915_eb_select_engine(struct intel_context *ce, intel_wakeref_t *wakeref,
+			  intel_wakeref_t *wakeref_gt0);
+void i915_eb_put_engine(struct intel_context *ce, intel_wakeref_t wakeref,
+			intel_wakeref_t wakeref_gt0);
 
 struct intel_context *
 i915_eb_find_context(struct intel_context *context,
