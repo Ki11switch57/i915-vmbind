@@ -84,7 +84,7 @@ static int eb_pin_timeline(struct intel_context *ce, bool throttle,
 
 			/*
 			 * Error path, cannot use intel_context_timeline_lock as
-			 * that is user interruptable and this clean up step
+			 * that is user interruptible and this clean up step
 			 * must be done.
 			 */
 			mutex_lock(&ce->timeline->mutex);
@@ -602,6 +602,8 @@ struct dma_fence *i915_eb_composite_fence_create(struct i915_request **requests,
 /**
  * i915_eb_select_engine() - Get engine references
  * @ce: the context
+ * @wakeref: returns wakeref of the associated tile
+ * @wakeref_gt0: returns wakeref of GT0 if the associated tile is not GT0
  *
  * Get reference of context @ce and children, reference of associated VM
  * and wakeref of associated tile. Also allocate @ce resources.
@@ -609,14 +611,22 @@ struct dma_fence *i915_eb_composite_fence_create(struct i915_request **requests,
  * Returns 0 upon success, -ve error upon failure.
  * Returns -EIO if the associated tile is wedged.
  */
-int i915_eb_select_engine(struct intel_context *ce)
+int i915_eb_select_engine(struct intel_context *ce, intel_wakeref_t *wakeref,
+			  intel_wakeref_t *wakeref_gt0)
 {
+	struct intel_gt *gt = ce->engine->gt;
 	struct intel_context *child;
 	int err;
 
 	for_each_child(ce, child)
 		intel_context_get(child);
-	intel_gt_pm_get(ce->engine->gt);
+	*wakeref = intel_gt_pm_get(gt);
+	/*
+	 * Keep GT0 active on MTL so that i915_vma_parked() doesn't
+	 * free VMAs while execbuf ioctl is validating VMAs.
+	 */
+	if (gt->info.id)
+		*wakeref_gt0 = intel_gt_pm_get(to_gt(gt->i915));
 
 	if (!test_bit(CONTEXT_ALLOC_BIT, &ce->flags)) {
 		err = intel_context_alloc_state(ce);
@@ -646,7 +656,10 @@ int i915_eb_select_engine(struct intel_context *ce)
 
 	return 0;
 err:
-	intel_gt_pm_put(ce->engine->gt);
+	if (gt->info.id)
+		intel_gt_pm_put(to_gt(gt->i915), *wakeref_gt0);
+
+	intel_gt_pm_put(gt, *wakeref);
 	for_each_child(ce, child)
 		intel_context_put(child);
 	return err;
@@ -655,16 +668,26 @@ err:
 /**
  * i915_eb_put_engine() - Release engine references
  * @ce: the context
+ * @wakeref: wakeref of the associated tile
+ * @wakeref_gt0: wakeref of GT0 if the associated tile is not GT0
  *
  * Release reference of context @ce and children, reference of associated VM
  * and wakeref of associated tile.
  */
-void i915_eb_put_engine(struct intel_context *ce)
+void i915_eb_put_engine(struct intel_context *ce, intel_wakeref_t wakeref,
+			intel_wakeref_t wakeref_gt0)
 {
+	struct intel_gt *gt = ce->engine->gt;
 	struct intel_context *child;
 
 	i915_vm_put(ce->vm);
-	intel_gt_pm_put(ce->engine->gt);
+	/*
+	 * This works in conjunction with i915_eb_select_engine() to prevent
+	 * i915_vma_parked() from interfering while execbuf validates vmas.
+	 */
+	if (gt->info.id)
+		intel_gt_pm_put(to_gt(gt->i915), wakeref_gt0);
+	intel_gt_pm_put(gt, wakeref);
 	for_each_child(ce, child)
 		intel_context_put(child);
 	intel_context_put(ce);
