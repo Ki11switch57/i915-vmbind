@@ -211,7 +211,7 @@ static int i915_gem_vm_unbind_vma(struct i915_address_space *vm,
 	 */
 	obj = vma->obj;
 	i915_gem_object_lock(obj, NULL);
-	i915_vma_destroy(vma);
+	i915_vma_destroy_async(vma);
 	i915_gem_object_unlock(obj);
 
 	i915_gem_object_put(obj);
