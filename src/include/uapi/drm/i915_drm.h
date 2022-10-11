@@ -4151,7 +4151,8 @@ struct drm_i915_gem_vm_bind {
  * any error.
  *
  * VM_BIND/UNBIND ioctl calls executed on different CPU threads concurrently
- * are not ordered.
+ * are not ordered. Furthermore, parts of the VM_UNBIND operation can be done
+ * asynchronously.
  */
 struct drm_i915_gem_vm_unbind {
 	/** @vm_id: VM (address space) id to bind */
