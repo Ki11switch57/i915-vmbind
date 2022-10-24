@@ -4106,12 +4106,17 @@ struct drm_i915_gem_vm_bind {
 	__u64 length;
 
 	/**
-	 * @flags: Currently reserved, MBZ.
+	 * @flags: Supported flags are:
+	 *
+	 * I915_GEM_VM_BIND_CAPTURE:
+	 * Capture this mapping in the dump upon GPU error.
+	 * CONFIG_DRM_I915_CAPTURE_ERROR should be enabled for valid capture.
 	 *
 	 * Note that @fence carries its own flags.
 	 */
 	__u64 flags;
-#define __I915_GEM_VM_BIND_UNKNOWN_FLAGS (~0ull)
+#define I915_GEM_VM_BIND_CAPTURE           (1ull << 0)
+#define __I915_GEM_VM_BIND_UNKNOWN_FLAGS   (-(I915_GEM_VM_BIND_CAPTURE << 1))
 
 	/** @rsvd: Reserved, MBZ */
 	__u64 rsvd[2];
