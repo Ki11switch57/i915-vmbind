@@ -303,6 +303,13 @@ struct i915_address_space {
 	/** @root_obj: root object for dma-resv sharing by private objects */
 	struct drm_i915_gem_object *root_obj;
 
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+	/* @vm_capture_list: list of vm captures */
+	struct list_head vm_capture_list;
+	/* @vm_capture_lock: protects vm_capture_list */
+	struct mutex vm_capture_lock;
+#endif
+
 	/* Global GTT */
 	bool is_ggtt:1;
 
