@@ -89,6 +89,12 @@ static void i915_gem_vm_bind_remove(struct i915_vma *vma, bool release_obj)
 {
 	lockdep_assert_held(&vma->vm->vm_bind_lock);
 
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+	mutex_lock(&vma->vm->vm_capture_lock);
+	if (!list_empty(&vma->vm_capture_link))
+		list_del_init(&vma->vm_capture_link);
+	mutex_unlock(&vma->vm->vm_capture_lock);
+#endif
 	spin_lock(&vma->vm->vm_rebind_lock);
 	if (!list_empty(&vma->vm_rebind_link))
 		list_del_init(&vma->vm_rebind_link);
@@ -356,6 +362,13 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
 				continue;
 		}
 
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+		if (va->flags & I915_GEM_VM_BIND_CAPTURE) {
+			mutex_lock(&vm->vm_capture_lock);
+			list_add_tail(&vma->vm_capture_link, &vm->vm_capture_list);
+			mutex_unlock(&vm->vm_capture_lock);
+		}
+#endif
 		list_add_tail(&vma->vm_bind_link, &vm->vm_bound_list);
 		i915_vm_bind_it_insert(vma, &vm->va);
 		if (!obj->priv_root)
