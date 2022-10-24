@@ -329,6 +329,11 @@ void i915_address_space_init(struct i915_address_space *vm, int subclass)
 	spin_lock_init(&vm->vm_rebind_lock);
 	spin_lock_init(&vm->userptr_invalidated_lock);
 	INIT_LIST_HEAD(&vm->userptr_invalidated_list);
+
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+	INIT_LIST_HEAD(&vm->vm_capture_list);
+	mutex_init(&vm->vm_capture_lock);
+#endif
 }
 
 void *__px_vaddr(struct drm_i915_gem_object *p)

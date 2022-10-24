@@ -141,6 +141,8 @@ try_again:
 	while (!ret && (vma = list_first_entry_or_null(&obj->vma.list,
 						       struct i915_vma,
 						       obj_link))) {
+		bool sync_unbind = true;
+
 		list_move_tail(&vma->obj_link, &still_in_list);
 		if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
 			continue;
@@ -169,8 +171,18 @@ try_again:
 		 * and destroy the vma from under us.
 		 */
 
+		/*
+		 * Synchronously unbind persistent mappings with capture
+		 * request so that vma->resource is valid in the error capture
+		 * path without needing extra reference taking in execbuf path.
+		 */
+		if (!mutex_lock_interruptible(&vma->vm->vm_capture_lock)) {
+			sync_unbind = !list_empty(&vma->vm_capture_link);
+			mutex_unlock(&vma->vm->vm_capture_lock);
+		}
+
 		ret = -EBUSY;
-		if (flags & I915_GEM_OBJECT_UNBIND_ASYNC) {
+		if (!sync_unbind && (flags & I915_GEM_OBJECT_UNBIND_ASYNC)) {
 			assert_object_held(vma->obj);
 			ret = i915_vma_unbind_async(vma, vm_trylock);
 		}
