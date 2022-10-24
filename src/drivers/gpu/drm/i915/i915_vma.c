@@ -283,6 +283,10 @@ skip_rb_insert:
 	INIT_LIST_HEAD(&vma->non_priv_vm_bind_link);
 	INIT_LIST_HEAD(&vma->vm_rebind_link);
 	INIT_LIST_HEAD(&vma->userptr_invalidated_link);
+
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+	INIT_LIST_HEAD(&vma->vm_capture_link);
+#endif
 	return vma;
 
 err_unlock:
