@@ -260,6 +260,10 @@ struct i915_vma {
 	struct list_head vm_rebind_link; /* Link in vm_rebind_list */
 	/** @userptr_invalidated_link: link to the vm->userptr_invalidated_list */
 	struct list_head userptr_invalidated_link;
+#if IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR)
+	/* @vm_capture_link: link to the captureable VMA list */
+	struct list_head vm_capture_link;
+#endif
 
 	/** Timeline fence for vm_bind completion notification */
 	struct {

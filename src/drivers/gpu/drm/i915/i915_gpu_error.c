@@ -1541,11 +1541,56 @@ capture_vma(struct intel_engine_capture_vma *next,
 }
 
 static struct intel_engine_capture_vma *
+capture_user_vm(struct intel_engine_capture_vma *capture,
+		struct i915_address_space *vm, gfp_t gfp)
+{
+	struct list_head vm_capture_list;
+	struct i915_vma *vma, *vn;
+	int err;
+
+	INIT_LIST_HEAD(&vm_capture_list);
+
+	err = mutex_lock_interruptible(&vm->vm_capture_lock);
+	if (err)
+		return capture;
+
+	/* vma->resource should be checked with vm->mutex held */
+	err = mutex_lock_interruptible(&vm->mutex);
+	if (err)
+		goto skip_user_vm_capture;
+
+	list_for_each_entry_safe(vma, vn, &vm->vm_capture_list,
+				 vm_capture_link) {
+		if (drm_WARN_ONCE(&vm->i915->drm, !vma->resource,
+				  "vma->resource expected!\n"))
+			continue;
+
+		i915_vma_resource_get(vma->resource);
+		list_move_tail(&vma->vm_capture_link, &vm_capture_list);
+	}
+	mutex_unlock(&vm->mutex);
+
+	list_for_each_entry(vma, &vm_capture_list, vm_capture_link) {
+		capture = capture_vma_snapshot(capture, vma->resource,
+					       gfp, "user");
+		i915_vma_resource_put(vma->resource);
+	}
+	list_splice_tail(&vm_capture_list, &vm->vm_capture_list);
+
+skip_user_vm_capture:
+	mutex_unlock(&vm->vm_capture_lock);
+
+	return capture;
+}
+
+static struct intel_engine_capture_vma *
 capture_user(struct intel_engine_capture_vma *capture,
 	     const struct i915_request *rq,
 	     gfp_t gfp)
 {
 	struct i915_capture_list *c;
+
+	capture = capture_user_vm(capture, rq->context->vm, gfp);
 
 	for (c = rq->capture_list; c; c = c->next)
 		capture = capture_vma_snapshot(capture, c->vma_res, gfp,
@@ -1613,16 +1658,9 @@ intel_engine_coredump_alloc(struct intel_engine_cs *engine, gfp_t gfp, u32 dump_
 }
 
 static struct intel_engine_capture_vma *
-engine_coredump_add_context(struct intel_engine_coredump *ee,
-			    struct intel_context *ce,
-			    gfp_t gfp)
+capture_context_vmas(struct intel_engine_capture_vma *vma,
+		     struct intel_context *ce, gfp_t gfp)
 {
-	struct intel_engine_capture_vma *vma = NULL;
-
-	ee->simulated |= record_context(&ee->context, ce);
-	if (ee->simulated)
-		return NULL;
-
 	/*
 	 * We need to copy these to an anonymous buffer
 	 * as the simplest method to avoid being overwritten
@@ -1634,6 +1672,18 @@ engine_coredump_add_context(struct intel_engine_coredump *ee,
 	return vma;
 }
 
+static struct intel_engine_capture_vma *
+engine_coredump_add_context(struct intel_engine_coredump *ee,
+			    struct intel_context *ce,
+			    gfp_t gfp)
+{
+	ee->simulated |= record_context(&ee->context, ce);
+	if (ee->simulated)
+		return NULL;
+
+	return capture_context_vmas(NULL, ce, gfp);
+}
+
 struct intel_engine_capture_vma *
 intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 				  struct i915_request *rq,
@@ -1641,17 +1691,19 @@ intel_engine_coredump_add_request(struct intel_engine_coredump *ee,
 {
 	struct intel_engine_capture_vma *vma;
 
-	vma = engine_coredump_add_context(ee, rq->context, gfp);
-	if (!vma)
+	ee->simulated |= record_context(&ee->context, rq->context);
+	if (ee->simulated)
 		return NULL;
 
 	/*
-	 * We need to copy these to an anonymous buffer
-	 * as the simplest method to avoid being overwritten
-	 * by userspace.
+	 * Ensure capture_user_vm which takes vm->mutex gets called first
+	 * as snapshoting the first vma starts dma fence critical section.
 	 */
+	vma = capture_user(NULL, rq, gfp);
 	vma = capture_vma_snapshot(vma, rq->batch_res, gfp, "batch");
-	vma = capture_user(vma, rq, gfp);
+	vma = capture_context_vmas(vma, rq->context, gfp);
+	if (!vma)
+		return NULL;
 
 	ee->rq_head = rq->head;
 	ee->rq_post = rq->postfix;
