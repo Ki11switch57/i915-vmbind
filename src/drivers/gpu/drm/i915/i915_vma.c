@@ -1364,6 +1364,113 @@ err_st_alloc:
 	return ERR_PTR(ret);
 }
 
+static unsigned int
+intel_copy_dma_sg(struct sg_table *src_st, struct sg_table *dst_st,
+		  u64 offset, u64 length, bool dry_run)
+{
+	struct scatterlist *dst_sg, *src_sg;
+	unsigned int i, len, nents = 0;
+
+	dst_sg = dst_st->sgl;
+	for_each_sgtable_dma_sg(src_st, src_sg, i) {
+		if (sg_dma_len(src_sg) <= offset) {
+			offset -= sg_dma_len(src_sg);
+			continue;
+		}
+
+		nents++;
+		len = min(sg_dma_len(src_sg) - offset, length);
+		if (!dry_run) {
+			sg_dma_address(dst_sg) = sg_dma_address(src_sg) + offset;
+			sg_dma_len(dst_sg) = len;
+			dst_sg = sg_next(dst_sg);
+		}
+
+		length -= len;
+		offset = 0;
+		if (!length)
+			break;
+	}
+	WARN_ON_ONCE(length);
+
+	return nents;
+}
+
+static unsigned int
+intel_copy_sg(struct sg_table *src_st, struct sg_table *dst_st,
+	      u64 offset, u64 length, bool dry_run)
+{
+	struct scatterlist *dst_sg, *src_sg;
+	unsigned int i, len, nents = 0;
+
+	dst_sg = dst_st->sgl;
+	for_each_sgtable_sg(src_st, src_sg, i) {
+		if (src_sg->length <= offset) {
+			offset -= src_sg->length;
+			continue;
+		}
+
+		nents++;
+		len = min(src_sg->length - offset, length);
+		if (!dry_run) {
+			unsigned long pfn;
+
+			pfn = page_to_pfn(sg_page(src_sg)) + offset / PAGE_SIZE;
+			sg_set_page(dst_sg, pfn_to_page(pfn), len, 0);
+			dst_sg = sg_next(dst_sg);
+		}
+
+		length -= len;
+		offset = 0;
+		if (!length)
+			break;
+	}
+	WARN_ON_ONCE(length);
+
+	return nents;
+}
+
+static noinline struct sg_table *
+intel_persistent_partial_pages(const struct i915_gtt_view *view,
+			       struct drm_i915_gem_object *obj)
+{
+	u64 offset = view->partial.offset << PAGE_SHIFT;
+	struct sg_table *st, *obj_st = obj->mm.pages;
+	u64 length = view->partial.size << PAGE_SHIFT;
+	unsigned int nents;
+	int ret = -ENOMEM;
+
+	st = kmalloc(sizeof(*st), GFP_KERNEL);
+	if (!st)
+		goto err_st_alloc;
+
+	/* Get required sg_table size */
+	nents = intel_copy_dma_sg(obj_st, st, offset, length, true);
+	if (i915_gem_object_has_struct_page(obj)) {
+		unsigned int pg_nents;
+
+		pg_nents = intel_copy_sg(obj_st, st, offset, length, true);
+		if (nents < pg_nents)
+			nents = pg_nents;
+	}
+
+	ret = sg_alloc_table(st, nents, GFP_KERNEL);
+	if (ret)
+		goto err_sg_alloc;
+
+	/* Build sg_table for specified <offset, length> section */
+	intel_copy_dma_sg(obj_st, st, offset, length, false);
+	if (i915_gem_object_has_struct_page(obj))
+		intel_copy_sg(obj_st, st, offset, length, false);
+
+	return st;
+
+err_sg_alloc:
+	kfree(st);
+err_st_alloc:
+	return ERR_PTR(ret);
+}
+
 static int
 __i915_vma_get_pages(struct i915_vma *vma)
 {
@@ -1396,7 +1503,11 @@ __i915_vma_get_pages(struct i915_vma *vma)
 		break;
 
 	case I915_GTT_VIEW_PARTIAL:
-		pages = intel_partial_pages(&vma->gtt_view, vma->obj);
+		if (i915_vma_is_persistent(vma))
+			pages = intel_persistent_partial_pages(&vma->gtt_view,
+							       vma->obj);
+		else
+			pages = intel_partial_pages(&vma->gtt_view, vma->obj);
 		break;
 	}
 
