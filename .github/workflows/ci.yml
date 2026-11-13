@@ -1,0 +1,56 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed git python
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Patch metadata and stacks apply on every target
+        run: python3 vmbind.py check $(python3 -c 'import json; print(json.load(open("RELEASE.json"))["target"])' 2>/dev/null)
+
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.t.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: t
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, tomllib
+          m = tomllib.load(open("vmbind.toml", "rb"))
+          ids = [t["id"] for t in m["targets"] if t.get("headers")]
+          if os.path.exists("RELEASE.json"):  # release/* branch: only its own target
+              rel = json.load(open("RELEASE.json"))["target"]
+              ids = [i for i in ids if i == rel]
+          print("ids=" + json.dumps(ids))
+          PY
+
+  build:
+    needs: [check, targets]
+    if: needs.targets.outputs.ids != '[]'
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.targets.outputs.ids) }}
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel clang lld llvm bc cpio git pahole bpf python zstd xz kmod libelf
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build ${{ matrix.target }} against its headers package
+        run: python3 vmbind.py check --build --container none ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: modules-${{ matrix.target }}
+          path: out/check-${{ matrix.target }}/
