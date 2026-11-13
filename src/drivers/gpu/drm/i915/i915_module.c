@@ -126,3 +126,7 @@ MODULE_AUTHOR("Intel Corporation");
 
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL and additional rights");
+MODULE_INFO(vm_bind_abi, __stringify(I915_VM_BIND_ABI_MAJOR) "." __stringify(I915_VM_BIND_ABI_MINOR));
+#ifdef I915_VMBIND_RELEASE
+MODULE_INFO(vm_bind_release, __stringify(I915_VMBIND_RELEASE));
+#endif
