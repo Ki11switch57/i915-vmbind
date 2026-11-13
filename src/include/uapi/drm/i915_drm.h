@@ -485,9 +485,13 @@ typedef struct _drm_i915_sarea {
 #define DRM_I915_GEM_VM_CREATE		0x3a
 #define DRM_I915_GEM_VM_DESTROY		0x3b
 #define DRM_I915_GEM_CREATE_EXT		0x3c
-#define DRM_I915_GEM_VM_BIND		0x3d
-#define DRM_I915_GEM_VM_UNBIND		0x3e
-#define DRM_I915_GEM_EXECBUFFER3	0x3f
+/*
+ * VM_BIND ioctls live at the top of the driver ioctl range so that new
+ * upstream i915 ioctls cannot collide with them.
+ */
+#define DRM_I915_GEM_VM_BIND		0x5d
+#define DRM_I915_GEM_VM_UNBIND		0x5e
+#define DRM_I915_GEM_EXECBUFFER3	0x5f
 /* Must be kept compact -- no holes */
 
 #define DRM_IOCTL_I915_INIT		DRM_IOW( DRM_COMMAND_BASE + DRM_I915_INIT, drm_i915_init_t)
@@ -832,7 +836,12 @@ typedef struct drm_i915_irq_wait {
  *
  * See struct drm_i915_gem_vm_bind and struct drm_i915_gem_vm_unbind.
  */
-#define I915_PARAM_VM_BIND_VERSION	60
+/*
+ * VM_BIND getparams use a private range (0x5642xxxx, "VB") so that new
+ * upstream getparams cannot collide with them.
+ */
+#define I915_PARAM_VM_BIND_BASE		0x56420000
+#define I915_PARAM_VM_BIND_VERSION	(I915_PARAM_VM_BIND_BASE + 0)
 
 /* Must be kept compact -- no holes and well documented */
 
@@ -2759,8 +2768,8 @@ struct drm_i915_gem_vm_control {
 	 *
 	 * VM created will work in VM_BIND mode.
 	 */
-#define I915_VM_CREATE_FLAGS_USE_VM_BIND	(1u << 0)
-#define I915_VM_CREATE_FLAGS_UNKNOWN	(-(I915_VM_CREATE_FLAGS_USE_VM_BIND << 1))
+#define I915_VM_CREATE_FLAGS_USE_VM_BIND	(1u << 31)
+#define I915_VM_CREATE_FLAGS_UNKNOWN	(~I915_VM_CREATE_FLAGS_USE_VM_BIND)
 	__u32 flags;
 
 	/** @vm_id: Id of the VM created or to be destroyed */
@@ -3881,7 +3890,8 @@ struct drm_i915_gem_create_ext {
 #define I915_GEM_CREATE_EXT_MEMORY_REGIONS 0
 #define I915_GEM_CREATE_EXT_PROTECTED_CONTENT 1
 #define I915_GEM_CREATE_EXT_SET_PAT 2
-#define I915_GEM_CREATE_EXT_VM_PRIVATE 3
+/* Private create extension range starts at 0x20. */
+#define I915_GEM_CREATE_EXT_VM_PRIVATE 0x20
 	__u64 extensions;
 };
 
