@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Fri, 23 Sep 2022 22:06:04 +0000
+Subject: [PATCH] drm/i915/vm_bind: Add support to create persistent vma
+
+Add i915_vma_instance_persistent() to create persistent vmas.
+Persistent vmas will use i915_gtt_view to support partial binding.
+
+vma_lookup is tied to segment of the object instead of section
+of VA space. Hence, it do not support aliasing. ie., multiple
+mappings (at different VA) point to the same gtt_view of object.
+Skip vma_lookup for persistent vmas to support aliasing.
+
+v2: Remove unused I915_VMA_PERSISTENT definition,
+    update validity check in i915_vma_compare(),
+    remove unwanted is_persistent check in release_references().
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Signed-off-by: Andi Shyti <andi.shyti@linux.intel.com>
+---
+ drivers/gpu/drm/i915/i915_vma.c       | 36 +++++++++++++++++++++++++++++++++--
+ drivers/gpu/drm/i915/i915_vma.h       | 17 ++++++++++++++++-
+ drivers/gpu/drm/i915/i915_vma_types.h |  6 ++++++
+ 3 files changed, 56 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index 751d8e33a0d5..0033a0b41cdf 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -147,7 +147,8 @@ static void __i915_vma_retire(struct i915_active *ref)
+ static struct i915_vma *
+ vma_create(struct drm_i915_gem_object *obj,
+ 	   struct i915_address_space *vm,
+-	   const struct intel_gtt_view *view)
++	   const struct intel_gtt_view *view,
++	   bool skip_lookup_cache)
+ {
+ 	struct i915_vma *pos = ERR_PTR(-E2BIG);
+ 	struct i915_vma *vma;
+@@ -234,6 +235,9 @@ vma_create(struct drm_i915_gem_object *obj,
+ 		__set_bit(I915_VMA_GGTT_BIT, __i915_vma_flags(vma));
+ 	}
+ 
++	if (skip_lookup_cache)
++		goto skip_rb_insert;
++
+ 	rb = NULL;
+ 	p = &obj->vma.tree.rb_node;
+ 	while (*p) {
+@@ -258,6 +262,7 @@ vma_create(struct drm_i915_gem_object *obj,
+ 	rb_link_node(&vma->obj_node, rb, p);
+ 	rb_insert_color(&vma->obj_node, &obj->vma.tree);
+ 
++skip_rb_insert:
+ 	if (i915_vma_is_ggtt(vma))
+ 		/*
+ 		 * We put the GGTT vma at the start of the vma-list, followed
+@@ -337,7 +342,34 @@ i915_vma_instance(struct drm_i915_gem_object *obj,
+ 
+ 	/* vma_create() will resolve the race if another creates the vma */
+ 	if (unlikely(!vma))
+-		vma = vma_create(obj, vm, view);
++		vma = vma_create(obj, vm, view, false);
++
++	GEM_BUG_ON(!IS_ERR(vma) && i915_vma_compare(vma, vm, view));
++	return vma;
++}
++
++/**
++ * i915_vma_create_persistent - create a persistent VMA
++ * @obj: parent &struct drm_i915_gem_object to be mapped
++ * @vm: address space in which the mapping is located
++ * @view: additional mapping requirements
++ *
++ * Creates a persistent vma.
++ *
++ * Returns the vma, or an error pointer.
++ */
++struct i915_vma *
++i915_vma_create_persistent(struct drm_i915_gem_object *obj,
++			   struct i915_address_space *vm,
++			   const struct intel_gtt_view *view)
++{
++	struct i915_vma *vma;
++
++	GEM_BUG_ON(!kref_read(&vm->ref));
++
++	vma = vma_create(obj, vm, view, true);
++	if (!IS_ERR(vma))
++		i915_vma_set_persistent(vma);
+ 
+ 	GEM_BUG_ON(!IS_ERR(vma) && i915_vma_compare(vma, vm, view));
+ 	return vma;
+diff --git a/drivers/gpu/drm/i915/i915_vma.h b/drivers/gpu/drm/i915/i915_vma.h
+index b0aca10bf8e7..570b1a889355 100644
+--- a/drivers/gpu/drm/i915/i915_vma.h
++++ b/drivers/gpu/drm/i915/i915_vma.h
+@@ -44,6 +44,10 @@ struct i915_vma *
+ i915_vma_instance(struct drm_i915_gem_object *obj,
+ 		  struct i915_address_space *vm,
+ 		  const struct intel_gtt_view *view);
++struct i915_vma *
++i915_vma_create_persistent(struct drm_i915_gem_object *obj,
++			   struct i915_address_space *vm,
++			   const struct intel_gtt_view *view);
+ 
+ void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags);
+ #define I915_VMA_RELEASE_MAP BIT(0)
+@@ -185,6 +189,16 @@ static inline u32 i915_ggtt_pin_bias(struct i915_vma *vma)
+ 	return i915_vm_to_ggtt(vma->vm)->pin_bias;
+ }
+ 
++static inline bool i915_vma_is_persistent(const struct i915_vma *vma)
++{
++	return test_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
++}
++
++static inline void i915_vma_set_persistent(struct i915_vma *vma)
++{
++	set_bit(I915_VMA_PERSISTENT_BIT, __i915_vma_flags(vma));
++}
++
+ static inline struct i915_vma *i915_vma_get(struct i915_vma *vma)
+ {
+ 	i915_gem_object_get(vma->obj);
+@@ -211,7 +225,8 @@ i915_vma_compare(struct i915_vma *vma,
+ {
+ 	ptrdiff_t cmp;
+ 
+-	GEM_BUG_ON(view && !i915_is_ggtt_or_dpt(vm));
++	GEM_BUG_ON(view && !(i915_is_ggtt_or_dpt(vm) ||
++			     i915_vma_is_persistent(vma)));
+ 
+ 	cmp = ptrdiff(vma->vm, vm);
+ 	if (cmp)
+diff --git a/drivers/gpu/drm/i915/i915_vma_types.h b/drivers/gpu/drm/i915/i915_vma_types.h
+index 95eaf68fdfae..e07660e6c679 100644
+--- a/drivers/gpu/drm/i915/i915_vma_types.h
++++ b/drivers/gpu/drm/i915/i915_vma_types.h
+@@ -214,6 +214,12 @@ struct i915_vma {
+ #define I915_VMA_SCANOUT_BIT	17
+ #define I915_VMA_SCANOUT	((int)BIT(I915_VMA_SCANOUT_BIT))
+ 
++/**
++ * I915_VMA_PERSISTENT_BIT:
++ * The vma is persistent (created with VM_BIND call).
++ */
++#define I915_VMA_PERSISTENT_BIT	19
++
+ 	struct i915_active active;
+ 
+ #define I915_VMA_PAGES_BIAS 24
+

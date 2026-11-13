@@ -1,0 +1,38 @@
+# Imports the newest kernel.org point release of every supported vanilla
+# line, applies the stacks, builds, and opens a PR. Conflicts are reported in
+# the PR for a maintainer to resolve locally with `vmbind.py start/continue`.
+name: monthly-import
+on:
+  schedule: [{ cron: "0 6 1 * *" }]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel git python curl github-cli
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+      - name: Import new point releases
+        id: imp
+        run: |
+          python3 ci/monthly.py >> "$GITHUB_STEP_SUMMARY"
+          git diff --quiet vmbind.toml && echo changed=0 >> "$GITHUB_OUTPUT" || echo changed=1 >> "$GITHUB_OUTPUT"
+      - name: Open PR
+        if: steps.imp.outputs.changed == '1'
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          b="monthly/$(date +%Y-%m)"
+          git checkout -b "$b"
+          git commit -am "Import new stable releases ($(date +%Y-%m))"
+          git push origin "$b" 'refs/tags/upstream/*'
+          gh pr create --fill --body-file "$GITHUB_STEP_SUMMARY" || gh pr create --fill
