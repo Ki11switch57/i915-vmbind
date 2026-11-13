@@ -1,0 +1,34 @@
+Subject: drm/i915/vm_bind: Fix VM reference leak in gem_create_ext error paths
+
+i915_gem_create_ext_ioctl() looks up the VM for I915_GEM_CREATE_EXT_VM_PRIVATE
+before validating I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS, but the two
+placement checks returned directly instead of dropping that reference.
+Route them through the existing vm_put label.
+---
+ drivers/gpu/drm/i915/gem/i915_gem_create.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_create.c b/drivers/gpu/drm/i915/gem/i915_gem_create.c
+index 2244dd1d9fdc..41d948494e31 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_create.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_create.c
+@@ -511,15 +511,16 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
+ 	}
+ 
+ 	if (args->flags & I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
++		ret = -EINVAL;
+ 		if (ext_data.n_placements == 1)
+-			return -EINVAL;
++			goto vm_put;
+ 
+ 		/*
+ 		 * We always need to be able to spill to system memory, if we
+ 		 * can't place in the mappable part of LMEM.
+ 		 */
+ 		if (!(ext_data.placement_mask & BIT(INTEL_REGION_SMEM)))
+-			return -EINVAL;
++			goto vm_put;
+ 	} else {
+ 		if (ext_data.n_placements > 1 ||
+ 		    ext_data.placements[0]->type != INTEL_MEMORY_SYSTEM)
+

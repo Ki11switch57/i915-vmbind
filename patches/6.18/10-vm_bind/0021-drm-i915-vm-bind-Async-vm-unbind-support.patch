@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Tue, 11 Oct 2022 18:57:40 +0000
+Subject: [PATCH] drm/i915/vm_bind: Async vm_unbind support
+
+Asynchronously unbind the vma upon vm_unbind call.
+Fall back to synchronous unbind if backend doesn't support
+async unbind or if async unbind fails.
+
+No need for vm_unbind out fence support as i915 will internally
+handle all sequencing and user need not try to sequence any
+operation with the unbind completion.
+
+v2: use i915_vma_destroy_async in vm_unbind ioctl
+v3: Add force_unbind function variants
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Reviewed-by: Andi Shyti <andi.shyti@linux.intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+---
+ drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c |  2 +-
+ drivers/gpu/drm/i915/i915_vma.c                    | 49 +++++++++++++++++++++-
+ drivers/gpu/drm/i915/i915_vma.h                    |  1 +
+ include/uapi/drm/i915_drm.h                        |  3 +-
+ 4 files changed, 51 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c b/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
+index c9e4771fbe29..e0d948a6422b 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
+@@ -210,7 +210,7 @@ static int i915_gem_vm_unbind_vma(struct i915_address_space *vm,
+ 	 */
+ 	obj = vma->obj;
+ 	i915_gem_object_lock(obj, NULL);
+-	i915_vma_destroy(vma);
++	i915_vma_destroy_async(vma);
+ 	i915_gem_object_unlock(obj);
+ 
+ 	i915_gem_object_put(obj);
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index 1ac6fcf16a2e..0f1bf9e5b90e 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -47,6 +47,8 @@
+ #include "i915_vma.h"
+ #include "i915_vma_resource.h"
+ 
++static struct dma_fence *__i915_vma_unbind_async(struct i915_vma *vma);
++
+ static inline void assert_vma_held_evict(const struct i915_vma *vma)
+ {
+ 	/*
+@@ -1846,7 +1848,7 @@ void i915_vma_reopen(struct i915_vma *vma)
+ 	spin_unlock_irq(&gt->closed_lock);
+ }
+ 
+-static void force_unbind(struct i915_vma *vma)
++static void __force_unbind(struct i915_vma *vma, bool async)
+ {
+ 	if (!drm_mm_node_allocated(&vma->node))
+ 		return;
+@@ -1860,10 +1862,26 @@ static void force_unbind(struct i915_vma *vma)
+ 		i915_vma_set_purged(vma);
+ 
+ 	atomic_and(~I915_VMA_PIN_MASK, &vma->flags);
+-	WARN_ON(__i915_vma_unbind(vma));
++	if (async) {
++		struct dma_fence *fence;
++
++		fence = __i915_vma_unbind_async(vma);
++		if (IS_ERR_OR_NULL(fence)) {
++			async = false;
++		} else {
++			dma_resv_add_fence(vma->obj->base.resv, fence,
++					   DMA_RESV_USAGE_READ);
++			dma_fence_put(fence);
++		}
++	}
++
++	if (!async)
++		WARN_ON(__i915_vma_unbind(vma));
+ 	GEM_BUG_ON(drm_mm_node_allocated(&vma->node));
+ }
+ 
++#define force_unbind(vma)	__force_unbind((vma), false)
++
+ static void release_references(struct i915_vma *vma, struct intel_gt *gt,
+ 			       bool vm_ddestroy)
+ {
+@@ -1942,6 +1960,33 @@ void i915_vma_destroy(struct i915_vma *vma)
+ 	release_references(vma, gt, vm_ddestroy);
+ }
+ 
++void i915_vma_destroy_async(struct i915_vma *vma)
++{
++	bool vm_ddestroy, async = vma->obj->mm.rsgt;
++	struct intel_gt *gt;
++
++	if (dma_resv_reserve_fences(vma->obj->base.resv, 1))
++		async = false;
++
++	mutex_lock(&vma->vm->mutex);
++	/*
++	 * Ensure any asynchronous binding is complete while using
++	 * async unbind as we will be releasing the vma here.
++	 */
++	if (async && i915_active_wait(&vma->active))
++		async = false;
++
++	__force_unbind(vma, async);
++	list_del_init(&vma->vm_link);
++	vm_ddestroy = vma->vm_ddestroy;
++	vma->vm_ddestroy = false;
++
++	/* vma->vm may be freed when releasing vma->vm->mutex. */
++	gt = vma->vm->gt;
++	mutex_unlock(&vma->vm->mutex);
++	release_references(vma, gt, vm_ddestroy);
++}
++
+ void i915_vma_parked(struct intel_gt *gt)
+ {
+ 	struct i915_vma *vma, *next;
+diff --git a/drivers/gpu/drm/i915/i915_vma.h b/drivers/gpu/drm/i915/i915_vma.h
+index c755dfafd16b..ae9b77f7bf85 100644
+--- a/drivers/gpu/drm/i915/i915_vma.h
++++ b/drivers/gpu/drm/i915/i915_vma.h
+@@ -319,6 +319,7 @@ void i915_vma_reopen(struct i915_vma *vma);
+ 
+ void i915_vma_destroy_locked(struct i915_vma *vma);
+ void i915_vma_destroy(struct i915_vma *vma);
++void i915_vma_destroy_async(struct i915_vma *vma);
+ 
+ #define assert_vma_held(vma) dma_resv_assert_held((vma)->obj->base.resv)
+ 
+diff --git a/include/uapi/drm/i915_drm.h b/include/uapi/drm/i915_drm.h
+index b88891aec632..2f7e06a4b42c 100644
+--- a/include/uapi/drm/i915_drm.h
++++ b/include/uapi/drm/i915_drm.h
+@@ -4151,7 +4151,8 @@ struct drm_i915_gem_vm_bind {
+  * any error.
+  *
+  * VM_BIND/UNBIND ioctl calls executed on different CPU threads concurrently
+- * are not ordered.
++ * are not ordered. Furthermore, parts of the VM_UNBIND operation can be done
++ * asynchronously.
+  */
+ struct drm_i915_gem_vm_unbind {
+ 	/** @vm_id: VM (address space) id to bind */
+
