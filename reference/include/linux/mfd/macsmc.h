@@ -1,0 +1,332 @@
+/* SPDX-License-Identifier: GPL-2.0-only OR MIT */
+/*
+ * Apple SMC (System Management Controller) core definitions
+ *
+ * Copyright (C) The Asahi Linux Contributors
+ */
+
+#ifndef _LINUX_MFD_MACSMC_H
+#define _LINUX_MFD_MACSMC_H
+
+#include <linux/ioctl.h>
+#include <linux/miscdevice.h>
+#include <linux/soc/apple/rtkit.h>
+
+/**
+ * typedef smc_key - Alias for u32 to be used for SMC keys
+ *
+ * SMC keys are 32bit integers containing packed ASCII characters in natural
+ * integer order, i.e. 0xAABBCCDD, which represent the FourCC ABCD.
+ * The SMC driver is designed with this assumption and ensures the right
+ * endianness is used when these are stored to memory and sent to or received
+ * from the actual SMC firmware (which can be done in either shared memory or
+ * as 64bit mailbox message on Apple Silicon).
+ * Internally, SMC stores these keys in a table sorted lexicographically and
+ * allows resolving an index into this table to the corresponding SMC key.
+ * Thus, storing keys as u32 is very convenient as it allows to e.g. use
+ * normal comparison operators which directly map to the natural order used
+ * by SMC firmware.
+ *
+ * This simple type alias is introduced to allow easy recognition of SMC key
+ * variables and arguments.
+ */
+typedef u32 smc_key;
+
+/**
+ * SMC_KEY - Convert FourCC SMC keys in source code to smc_key
+ *
+ * This macro can be used to easily define FourCC SMC keys in source code
+ * and convert these to u32 / smc_key, e.g. SMC_KEY(NTAP) will expand to
+ * 0x4e544150.
+ *
+ * @s: FourCC SMC key to be converted
+ */
+#define SMC_KEY(s) (smc_key)(_SMC_KEY(#s))
+#define _SMC_KEY(s) (((s)[0] << 24) | ((s)[1] << 16) | ((s)[2] << 8) | (s)[3])
+#define __SMC_KEY(a, b, c, d) (((u32)(a) << 24) | ((u32)(b) << 16) | ((u32)(c) << 8) | ((u32)(d)))
+
+#define APPLE_SMC_READABLE BIT(7)
+#define APPLE_SMC_WRITABLE BIT(6)
+#define APPLE_SMC_FUNCTION BIT(4)
+
+#define SMC_MSG_READ_KEY                0x10
+#define SMC_MSG_WRITE_KEY               0x11
+#define SMC_MSG_GET_KEY_BY_INDEX        0x12
+#define SMC_MSG_GET_KEY_INFO            0x13
+#define SMC_MSG_INITIALIZE              0x17
+#define SMC_MSG_NOTIFICATION            0x18
+#define SMC_MSG_RW_KEY                  0x20
+
+/**
+ * struct apple_smc_key_info - Information for a SMC key as returned by SMC
+ * @type_code: FourCC code indicating the type for this key.
+ *             Known types:
+ *              ch8*: ASCII string
+ *              flag: Boolean, 1 or 0
+ *              flt: 32-bit single-precision IEEE 754 float
+ *              hex: Binary data
+ *              ioft: 64bit Unsigned fixed-point intger (48.16)
+ *              {si,ui}{8,16,32,64}: Signed/Unsigned 8-/16-/32-/64-bit integer
+ * @size: Size of the buffer associated with this key
+ * @flags: Bitfield encoding flags (APPLE_SMC_{READABLE,WRITABLE,FUNCTION})
+ */
+struct apple_smc_key_info {
+	u32 type_code;
+	u8 size;
+	u8 flags;
+};
+
+/**
+ * enum apple_smc_boot_stage - SMC boot stage
+ * @APPLE_SMC_BOOTING: SMC is booting
+ * @APPLE_SMC_INITIALIZED: SMC is initialized and ready to use
+ * @APPLE_SMC_ERROR_NO_SHMEM: Shared memory could not be initialized during boot
+ * @APPLE_SMC_ERROR_CRASHED: SMC has crashed
+ */
+enum apple_smc_boot_stage {
+	APPLE_SMC_BOOTING,
+	APPLE_SMC_INITIALIZED,
+	APPLE_SMC_ERROR_NO_SHMEM,
+	APPLE_SMC_ERROR_CRASHED
+};
+
+/**
+ * struct apple_smc_backend_ops - SMC backend interface
+ * @read: Read SMC key data
+ * @write: Write SMC key data
+ * @enter_atomic: Enter atomic access mode
+ * @write_atomic: Atomic write to SMC key
+ * @rw: Combined write/read transaction
+ * @get_key_by_index: Resolve key by index
+ * @get_key_info: Get metadata for key
+ * @disable_notifications: Disable notfications on removal
+ */
+struct apple_smc_backend_ops {
+	int (*read)(void *cookie, smc_key key, void *buf, size_t size);
+	int (*write)(void *cookie, smc_key key, const void *buf, size_t size);
+	int (*enter_atomic)(void *cookie);
+	int (*write_atomic)(void *cookie, smc_key key, const void *buf, size_t size);
+	int (*rw)(void *cookie, smc_key key, const void *wbuf, size_t wsize,
+		  void *rbuf, size_t rsize);
+	int (*get_key_by_index)(void *cookie, int index, smc_key *key);
+	int (*get_key_info)(void *cookie, smc_key key,
+			    struct apple_smc_key_info *info);
+	void (*disable_notifications)(void *cookie);
+};
+
+
+/**
+ * struct apple_smc
+ * @dev: Underlying device struct for the physical backend device
+ * @key_count: Number of available SMC keys
+ * @first_key: First valid SMC key
+ * @last_key: Last valid SMC key
+ * @event_handlers: Pointer to Notifier call chain from the backend
+ * @be: Backend operations for SMC access
+ * @be_cookie: Backend context passed to ops callbacks
+ * @is_acpi: Is the backend ACPI based
+ * @mutex: Mutex for non-atomic mode
+ * @lock: Spinlock for atomic mode
+ * @miscdev: Misc Device struct for ioctl ops
+ */
+struct apple_smc {
+	struct device *dev;
+
+	u32 key_count;
+	smc_key first_key;
+	smc_key last_key;
+
+	struct blocking_notifier_head *event_handlers;
+	const struct apple_smc_backend_ops *be;
+	void *be_cookie;
+
+	bool is_acpi;
+
+	struct mutex mutex;
+	spinlock_t lock;
+
+	struct miscdevice miscdev;
+};
+
+struct ioctl_smc_rw_payload {
+	smc_key key;
+	size_t size;
+	u8 buf[32];
+};
+
+struct ioctl_smc_index_payload {
+	int index;
+	smc_key key;
+};
+
+struct ioctl_smc_info_payload {
+	smc_key key;
+	struct apple_smc_key_info info;
+};
+
+#define APPLE_SMC_MAGIC 'S'
+#define IOCTL_SMC_READ           _IOWR(APPLE_SMC_MAGIC, 1, struct ioctl_smc_rw_payload)
+#define IOCTL_SMC_WRITE          _IOW(APPLE_SMC_MAGIC, 2, struct ioctl_smc_rw_payload)
+#define IOCTL_SMC_GET_KEY_INDEX  _IOWR(APPLE_SMC_MAGIC, 3, struct ioctl_smc_index_payload)
+#define IOCTL_SMC_GET_KEY_INFO   _IOWR(APPLE_SMC_MAGIC, 4, struct ioctl_smc_info_payload)
+
+/**
+ * apple_smc_read - Read size bytes from given SMC key into buf
+ * @smc: Pointer to apple_smc struct
+ * @key: smc_key to be read
+ * @buf: Buffer into which size bytes of data will be read from SMC
+ * @size: Number of bytes to be read into buf
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_read(struct apple_smc *smc, smc_key key, void *buf, size_t size);
+
+/**
+ * apple_smc_write - Write size bytes into given SMC key from buf
+ * @smc: Pointer to apple_smc struct
+ * @key: smc_key data will be written to
+ * @buf: Buffer from which size bytes of data will be written to SMC
+ * @size: Number of bytes to be written
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_write(struct apple_smc *smc, smc_key key, const void *buf, size_t size);
+
+/**
+ * apple_smc_enter_atomic - Enter atomic mode to be able to use apple_smc_write_atomic
+ * @smc: Pointer to apple_smc struct
+ *
+ * This function switches the SMC backend to atomic mode which allows the
+ * use of apple_smc_write_atomic while disabling *all* other functions.
+ * This is only used for shutdown/reboot which requires writing to a SMC
+ * key from atomic context.
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_enter_atomic(struct apple_smc *smc);
+
+/**
+ * apple_smc_write_atomic - Write size bytes into given SMC key from buf without sleeping
+ * @smc: Pointer to apple_smc struct
+ * @key: smc_key data will be written to
+ * @buf: Buffer from which size bytes of data will be written to SMC
+ * @size: Number of bytes to be written
+ *
+ * Note that this function will fail if apple_smc_enter_atomic hasn't been
+ * called before.
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_write_atomic(struct apple_smc *smc, smc_key key, const void *buf, size_t size);
+
+/**
+ * apple_smc_rw - Write and then read using the given SMC key
+ * @smc: Pointer to apple_smc struct
+ * @key: smc_key data will be written to
+ * @wbuf: Buffer from which size bytes of data will be written to SMC
+ * @wsize: Number of bytes to be written
+ * @rbuf: Buffer to which size bytes of data will be read from SMC
+ * @rsize: Number of bytes to be read
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_rw(struct apple_smc *smc, smc_key key, const void *wbuf, size_t wsize,
+		 void *rbuf, size_t rsize);
+
+/**
+ * apple_smc_get_key_by_index - Given an index return the corresponding SMC key
+ * @smc: Pointer to apple_smc struct
+ * @index: Index to be resolved
+ * @key: Buffer for SMC key to be returned
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_get_key_by_index(struct apple_smc *smc, int index, smc_key *key);
+
+/**
+ * apple_smc_get_key_info - Get key information from SMC
+ * @smc: Pointer to apple_smc struct
+ * @key: Key to acquire information for
+ * @info: Pointer to struct apple_smc_key_info which will be filled
+ *
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_get_key_info(struct apple_smc *smc, smc_key key, struct apple_smc_key_info *info);
+
+/**
+ * apple_smc_key_exists - Check if the given SMC key exists
+ * @smc: Pointer to apple_smc struct
+ * @key: smc_key to be checked
+ *
+ * Return: True if the key exists, false otherwise
+ */
+static inline bool apple_smc_key_exists(struct apple_smc *smc, smc_key key)
+{
+	return apple_smc_get_key_info(smc, key, NULL) >= 0;
+}
+
+/**
+ * apple_smc_probe - Initialize Apple SMC device
+ * @dev: Device for the SMC instance
+ * @ops: Backend operations for SMC access
+ * @cookie: Opaque backend context
+ * @event_handlers: Pointer to Notifier call chain from backend
+ * @is_acpi: Is the backend ACPI based.
+ * Return: Zero on success, negative errno on error
+ */
+int apple_smc_probe(struct device *dev, const struct apple_smc_backend_ops *ops,
+		void *cookie, struct blocking_notifier_head *event_handlers, bool is_acpi);
+
+#define APPLE_SMC_TYPE_OPS(type) \
+	static inline int apple_smc_read_##type(struct apple_smc *smc, smc_key key, type *p) \
+	{ \
+		int ret = apple_smc_read(smc, key, p, sizeof(*p)); \
+		return (ret < 0) ? ret : ((ret != sizeof(*p)) ? -EINVAL : 0); \
+	} \
+	static inline int apple_smc_write_##type(struct apple_smc *smc, smc_key key, type p) \
+	{ \
+		return apple_smc_write(smc, key, &p, sizeof(p)); \
+	} \
+	static inline int apple_smc_write_##type##_atomic(struct apple_smc *smc, smc_key key, type p) \
+	{ \
+		return apple_smc_write_atomic(smc, key, &p, sizeof(p)); \
+	} \
+	static inline int apple_smc_rw_##type(struct apple_smc *smc, smc_key key, \
+					      type w, type *r) \
+	{ \
+		int ret = apple_smc_rw(smc, key, &w, sizeof(w), r, sizeof(*r)); \
+		return (ret < 0) ? ret : ((ret != sizeof(*r)) ? -EINVAL : 0); \
+	}
+
+APPLE_SMC_TYPE_OPS(u64)
+APPLE_SMC_TYPE_OPS(u32)
+APPLE_SMC_TYPE_OPS(u16)
+APPLE_SMC_TYPE_OPS(u8)
+APPLE_SMC_TYPE_OPS(s64)
+APPLE_SMC_TYPE_OPS(s32)
+APPLE_SMC_TYPE_OPS(s16)
+APPLE_SMC_TYPE_OPS(s8)
+
+static inline int apple_smc_read_flag(struct apple_smc *smc, smc_key key, bool *flag)
+{
+	u8 val;
+	int ret = apple_smc_read_u8(smc, key, &val);
+
+	if (ret < 0)
+		return ret;
+
+	*flag = val ? true : false;
+	return ret;
+}
+
+static inline int apple_smc_write_flag(struct apple_smc *smc, smc_key key, bool state)
+{
+	return apple_smc_write_u8(smc, key, state ? 1 : 0);
+}
+
+static inline int apple_smc_write_flag_atomic(struct apple_smc *smc, smc_key key, bool state)
+{
+	return apple_smc_write_u8_atomic(smc, key, state ? 1 : 0);
+}
+
+#endif
