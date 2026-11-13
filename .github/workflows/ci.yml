@@ -1,0 +1,51 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - run: pacman -Syu --noconfirm --needed git python
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Patch metadata and stacks apply on every target
+        run: python3 vmbind.py check
+
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.t.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: t
+        run: |
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import tomllib, json
+          m = tomllib.load(open("vmbind.toml", "rb"))
+          print("ids=" + json.dumps([t["id"] for t in m["targets"] if t.get("headers")]))
+          PY
+
+  build:
+    needs: [check, targets]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.targets.outputs.ids) }}
+    steps:
+      - run: pacman -Syu --noconfirm --needed base-devel clang lld llvm bc cpio git pahole bpf python zstd xz kmod libelf
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build ${{ matrix.target }} against its headers package
+        run: python3 vmbind.py check --build --container none ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: modules-${{ matrix.target }}
+          path: out/check-${{ matrix.target }}/

@@ -1,0 +1,58 @@
+Subject: drm/i915/vm_bind: Add enable_vm_bind module parameter
+
+Add a kill switch for the VM_BIND uapi. With i915.enable_vm_bind=0 the
+driver refuses to create VM_BIND mode VMs and reports
+I915_PARAM_VM_BIND_VERSION as 0, so userspace falls back to execbuf2 and
+the driver behaves like stock i915. All VM_BIND, VM_UNBIND and
+EXECBUFFER3 paths already require a VM_BIND mode VM, so they are
+unreachable when the switch is off.
+---
+ drivers/gpu/drm/i915/i915_drv.h    | 3 ++-
+ drivers/gpu/drm/i915/i915_params.c | 5 +++++
+ drivers/gpu/drm/i915/i915_params.h | 3 ++-
+ 3 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_drv.h b/drivers/gpu/drm/i915/i915_drv.h
+index 3831109c1711..b2559aff5775 100644
+--- a/drivers/gpu/drm/i915/i915_drv.h
++++ b/drivers/gpu/drm/i915/i915_drv.h
+@@ -664,6 +664,7 @@ IS_SUBPLATFORM(const struct drm_i915_private *i915,
+ #define HAS_LMEMBAR_SMEM_STOLEN(i915) (!HAS_LMEM(i915) && \
+ 				       GRAPHICS_VER_FULL(i915) >= IP_VER(12, 70))
+ 
+-#define HAS_VM_BIND(i915) (GRAPHICS_VER(i915) >= 12)
++#define HAS_VM_BIND(i915) \
++	(GRAPHICS_VER(i915) >= 12 && (i915)->params.enable_vm_bind)
+ 
+ #endif
+diff --git a/drivers/gpu/drm/i915/i915_params.c b/drivers/gpu/drm/i915/i915_params.c
+index 34ed82bb1b1a..72a4dd0e4efe 100644
+--- a/drivers/gpu/drm/i915/i915_params.c
++++ b/drivers/gpu/drm/i915/i915_params.c
+@@ -113,6 +113,11 @@ i915_param_named_unsafe(gsc_firmware_path, charp, 0400,
+ #if IS_ENABLED(CONFIG_DRM_I915_GVT)
+ i915_param_named(enable_gvt, bool, 0400,
+ 	"Enable support for Intel GVT-g graphics virtualization host support(default:false)");
++
++i915_param_named(enable_vm_bind, bool, 0400,
++	"Enable the VM_BIND/EXECBUFFER3 uapi on Gen12+ (default: true). "
++	"When disabled, VM_BIND mode VMs cannot be created and "
++	"I915_PARAM_VM_BIND_VERSION reports 0.");
+ #endif
+ 
+ #if CONFIG_DRM_I915_REQUEST_TIMEOUT
+diff --git a/drivers/gpu/drm/i915/i915_params.h b/drivers/gpu/drm/i915/i915_params.h
+index 4d9d4cd3220d..63f147e8af48 100644
+--- a/drivers/gpu/drm/i915/i915_params.h
++++ b/drivers/gpu/drm/i915/i915_params.h
+@@ -63,7 +63,8 @@ struct drm_printer;
+ 	param(bool, enable_hangcheck, true, 0600) \
+ 	param(bool, error_capture, true, IS_ENABLED(CONFIG_DRM_I915_CAPTURE_ERROR) ? 0600 : 0) \
+ 	param(bool, enable_gvt, false, IS_ENABLED(CONFIG_DRM_I915_GVT) ? 0400 : 0) \
+-	param(bool, enable_debug_only_api, false, IS_ENABLED(CONFIG_DRM_I915_REPLAY_GPU_HANGS_API) ? 0400 : 0)
++	param(bool, enable_debug_only_api, false, IS_ENABLED(CONFIG_DRM_I915_REPLAY_GPU_HANGS_API) ? 0400 : 0) \
++	param(bool, enable_vm_bind, true, 0400)
+ 
+ #define MEMBER(T, member, ...) T member;
+ struct i915_params {
+

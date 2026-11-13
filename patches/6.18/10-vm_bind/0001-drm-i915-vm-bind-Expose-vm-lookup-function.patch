@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Sat, 27 Aug 2022 13:17:10 +0000
+Subject: [PATCH] drm/i915/vm_bind: Expose vm lookup function
+
+Make i915_gem_vm_lookup() function non-static as it will be
+used by the vm_bind feature.
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Signed-off-by: Andi Shyti <andi.shyti@linux.intel.com>
+---
+ drivers/gpu/drm/i915/gem/i915_gem_context.c | 11 ++++++++++-
+ drivers/gpu/drm/i915/gem/i915_gem_context.h |  3 +++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_context.c b/drivers/gpu/drm/i915/gem/i915_gem_context.c
+index ae5194625508..6fd0954a0062 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_context.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_context.c
+@@ -348,7 +348,16 @@ static int proto_context_register(struct drm_i915_file_private *fpriv,
+ 	return ret;
+ }
+ 
+-static struct i915_address_space *
++/**
++ * i915_gem_vm_lookup() - looks up for the VM reference given the vm id
++ * @file_priv: the private data associated with the user's file
++ * @id: the VM id
++ *
++ * Finds the VM reference associated to a specific id.
++ *
++ * Returns the VM pointer on success, NULL in case of failure.
++ */
++struct i915_address_space *
+ i915_gem_vm_lookup(struct drm_i915_file_private *file_priv, u32 id)
+ {
+ 	struct i915_address_space *vm;
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_context.h b/drivers/gpu/drm/i915/gem/i915_gem_context.h
+index 6e682a6a0574..2d533fa991e9 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_context.h
++++ b/drivers/gpu/drm/i915/gem/i915_gem_context.h
+@@ -138,6 +138,9 @@ int i915_gem_context_setparam_ioctl(struct drm_device *dev, void *data,
+ int i915_gem_context_reset_stats_ioctl(struct drm_device *dev, void *data,
+ 				       struct drm_file *file);
+ 
++struct i915_address_space *
++i915_gem_vm_lookup(struct drm_i915_file_private *file_priv, u32 id);
++
+ struct i915_gem_context *
+ i915_gem_context_lookup(struct drm_i915_file_private *file_priv, u32 id);
+ 
+
