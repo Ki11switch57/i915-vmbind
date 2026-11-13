@@ -1,0 +1,103 @@
+# i915-vmbind manifest. Read by vmbind.py (Python 3.11+, tomllib).
+
+[project]
+name = "i915-vmbind"
+version = "1.0.0"
+# VM_BIND uapi contract version (I915_PARAM_VM_BIND_ABI). Bump the major on
+# any incompatible uapi change and update docs/abi.md and the Mesa repo.
+abi = "1.0"
+
+[import]
+# Copied from a kernel tree into src/ of an upstream/<id> tag. The stacks
+# may only touch these paths.
+src = [
+    "drivers/gpu/drm/i915",
+    "include/uapi/drm",
+    "drivers/platform/x86/intel_ips.h",
+    "Documentation/gpu/i915.rst",
+    "Documentation/gpu/rfc",
+]
+# Copied into reference/ for review and the build-time header guard.
+# Never used as an include path: builds always use the target kernel's headers.
+reference = ["include", "arch/x86/include"]
+
+[stacks]
+# Applied in this order from patches/<line>/<stack>/.
+order = ["00-compat", "10-vm_bind", "20-fixes", "30-safety"]
+# Stacks written by this repository's maintainers. Their patches carry no
+# author header; `init`/`release` commit them as the maintainer running the
+# tool. All other stacks keep the original authors (git am).
+local = ["00-compat", "20-fixes", "30-safety"]
+
+[guard]
+# Header paths (globs, relative to the kernel build dir) the header guard
+# should not compare. Keep this empty unless a difference is known harmless.
+ignore = []
+
+# Targets: one pinned kernel source per entry. `kver` is a regex matched
+# against `uname -r`; flavoured targets are tried before vanilla ones.
+# `headers` lists packages CI builds against; the first reachable one is used.
+
+[[targets]]
+id = "7.3.4"
+line = "7.3"
+flavour = "vanilla"
+kernelversion = "7.3.4"
+source = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.4.tar.xz"
+kver = '^7\.3\.4([-.+].*)?$'
+headers = ["https://archive.archlinux.org/packages/l/linux-headers/linux-headers-7.3.4.arch1-2-x86_64.pkg.tar.zst"]
+
+[[targets]]
+id = "7.3.3-cachyos"
+line = "7.3"
+flavour = "cachyos"
+kernelversion = "7.3.3"
+source = "https://github.com/CachyOS/linux.git@cachyos-7.3.3-1"
+kver = '^7\.3\.3-\d+-cachyos$'
+headers = [
+    "https://mirror.cachyos.org/repo/x86_64/cachyos/linux-cachyos-headers-7.3.3-1-x86_64.pkg.tar.zst",
+    "https://archive.cachyos.org/archive/cachyos/linux-cachyos-headers-7.3.3-1-x86_64.pkg.tar.zst",
+]
+
+[[targets]]
+id = "7.3.1-cachyos"
+line = "7.3"
+flavour = "cachyos"
+kernelversion = "7.3.1"
+source = "https://github.com/CachyOS/linux.git@cachyos-7.3.1-1"
+kver = '^7\.3\.1-\d+-cachyos$'
+headers = [
+    "https://archive.cachyos.org/archive/cachyos/linux-cachyos-headers-7.3.1-1-x86_64.pkg.tar.zst",
+    "https://mirror.cachyos.org/repo/x86_64/cachyos/linux-cachyos-headers-7.3.1-1-x86_64.pkg.tar.zst",
+]
+
+[[targets]]
+id = "6.18.63"
+line = "6.18"
+flavour = "vanilla"
+kernelversion = "6.18.63"
+source = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.63.tar.xz"
+kver = '^6\.18\.63([-.+].*)?$'
+headers = ["https://archive.archlinux.org/packages/l/linux-lts-headers/linux-lts-headers-6.18.63-3-x86_64.pkg.tar.zst"]
+
+[[targets]]
+id = "6.18.60-cachyos-lts"
+line = "6.18"
+flavour = "cachyos-lts"
+kernelversion = "6.18.60"
+source = "https://github.com/CachyOS/linux.git@cachyos-6.18.60-1"
+kver = '^6\.18\.60-\d+-cachyos-lts$'
+headers = [
+    "https://mirror.cachyos.org/repo/x86_64/cachyos/linux-cachyos-lts-headers-6.18.60-2-x86_64.pkg.tar.zst",
+    "https://archive.cachyos.org/archive/cachyos/linux-cachyos-lts-headers-6.18.60-2-x86_64.pkg.tar.zst",
+]
+
+[[targets]]
+id = "7.4-rc2"
+line = "7.4"
+flavour = "mainline"
+status = "experimental"
+kernelversion = "7.4.0-rc2"
+source = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git@ee83899302a0"
+kver = '^7\.4\.0-rc2.*$'
+headers = []
