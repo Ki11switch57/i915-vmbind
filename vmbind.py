@@ -528,6 +528,18 @@ TOOL_PATHS = ["vmbind.py", "vmbind.toml", "README.md", "MAINTAINING.md", "LICENS
               "patches", "tests", "docs", "ci", ".github", ".gitignore"]
 
 
+def previous_tips(branch: str) -> list[str]:
+    """Existing local and origin tips of a release branch, minus ancestors of each other."""
+    tips = []
+    for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
+        r = git("rev-parse", "-q", "--verify", f"{ref}^{{commit}}", check=False)
+        if r.returncode == 0 and r.stdout.strip() not in tips:
+            tips.append(r.stdout.strip())
+    return [a for a in tips
+            if not any(b != a and git("merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+                       for b in tips)]
+
+
 def cmd_release(args) -> None:
     m = manifest()
     env = ident_env(args)
@@ -568,6 +580,13 @@ def cmd_release(args) -> None:
             git("commit", "-q", "--no-verify", "-m", f"Release i915-vmbind {version} for {tid}",
                 cwd=wt, env=env)
             commit = gitout("rev-parse", "HEAD", cwd=wt)
+            prev = previous_tips(branch)
+            if prev:
+                # Keep release/* fast-forward: the new release merges the previous tips,
+                # with the tree of the freshly patched snapshot.
+                parents = [x for c in prev for x in ("-p", c)] + ["-p", commit]
+                commit = gitout("commit-tree", f"{commit}^{{tree}}", *parents, "-m",
+                                f"Release i915-vmbind {version} for {tid}", env=env)
             git("branch", "-f", branch, commit)
             git("tag", "-a", "-m", f"i915-vmbind {version} for {tid}", tag, commit, env=env)
             log(f"{branch} -> {tag}")

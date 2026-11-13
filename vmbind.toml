@@ -2,7 +2,7 @@
 
 [project]
 name = "i915-vmbind"
-version = "1.0.1"
+version = "1.0.2"
 # VM_BIND uapi contract version (I915_PARAM_VM_BIND_ABI). Bump the major on
 # any incompatible uapi change and update docs/abi.md and the Mesa repo.
 abi = "1.0"
