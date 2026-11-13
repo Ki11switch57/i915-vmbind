@@ -842,6 +842,17 @@ typedef struct drm_i915_irq_wait {
  */
 #define I915_PARAM_VM_BIND_BASE		0x56420000
 #define I915_PARAM_VM_BIND_VERSION	(I915_PARAM_VM_BIND_BASE + 0)
+/*
+ * VM_BIND ABI version, (major << 16) | minor, or 0 when VM_BIND is
+ * unavailable. Userspace must only use VM_BIND when the major version
+ * matches the one it was built for and the minor version is at least
+ * the one it needs; otherwise it should fall back to execbuf2.
+ */
+#define I915_PARAM_VM_BIND_ABI		(I915_PARAM_VM_BIND_BASE + 1)
+#define I915_VM_BIND_ABI_MAJOR		1
+#define I915_VM_BIND_ABI_MINOR		0
+#define I915_VM_BIND_ABI_VERSION \
+	((I915_VM_BIND_ABI_MAJOR << 16) | I915_VM_BIND_ABI_MINOR)
 
 /* Must be kept compact -- no holes and well documented */
 
