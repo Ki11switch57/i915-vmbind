@@ -199,6 +199,9 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
 	case I915_PARAM_VM_BIND_VERSION:
 		value = HAS_VM_BIND(i915);
 		break;
+	case I915_PARAM_VM_BIND_ABI:
+		value = HAS_VM_BIND(i915) ? I915_VM_BIND_ABI_VERSION : 0;
+		break;
 	default:
 		drm_dbg(&i915->drm, "Unknown parameter %d\n", param->param);
 		return -EINVAL;
