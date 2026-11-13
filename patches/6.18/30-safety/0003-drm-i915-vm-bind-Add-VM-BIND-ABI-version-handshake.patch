@@ -1,0 +1,62 @@
+Subject: drm/i915/vm_bind: Add VM_BIND ABI version handshake
+
+Add I915_PARAM_VM_BIND_ABI, reporting (major << 16) | minor of the VM_BIND
+uapi contract, or 0 when VM_BIND is unavailable. Userspace built for a
+different major version must not use VM_BIND and should fall back to
+execbuf2. The same version is exposed as the vm_bind_abi modinfo field,
+and builds can stamp a vm_bind_release field via I915_VMBIND_RELEASE.
+---
+ drivers/gpu/drm/i915/i915_getparam.c |  3 +++
+ drivers/gpu/drm/i915/i915_module.c   |  4 ++++
+ include/uapi/drm/i915_drm.h          | 11 +++++++++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/drivers/gpu/drm/i915/i915_getparam.c b/drivers/gpu/drm/i915/i915_getparam.c
+index 0e96c52d9ccd..6a5ef9d3bf0b 100644
+--- a/drivers/gpu/drm/i915/i915_getparam.c
++++ b/drivers/gpu/drm/i915/i915_getparam.c
+@@ -199,6 +199,9 @@ int i915_getparam_ioctl(struct drm_device *dev, void *data,
+ 	case I915_PARAM_VM_BIND_VERSION:
+ 		value = HAS_VM_BIND(i915);
+ 		break;
++	case I915_PARAM_VM_BIND_ABI:
++		value = HAS_VM_BIND(i915) ? I915_VM_BIND_ABI_VERSION : 0;
++		break;
+ 	default:
+ 		drm_dbg(&i915->drm, "Unknown parameter %d\n", param->param);
+ 		return -EINVAL;
+diff --git a/drivers/gpu/drm/i915/i915_module.c b/drivers/gpu/drm/i915/i915_module.c
+index 5862754c662c..0bd5e0add9e7 100644
+--- a/drivers/gpu/drm/i915/i915_module.c
++++ b/drivers/gpu/drm/i915/i915_module.c
+@@ -126,3 +126,7 @@ MODULE_AUTHOR("Intel Corporation");
+ 
+ MODULE_DESCRIPTION(DRIVER_DESC);
+ MODULE_LICENSE("GPL and additional rights");
++MODULE_INFO(vm_bind_abi, __stringify(I915_VM_BIND_ABI_MAJOR) "." __stringify(I915_VM_BIND_ABI_MINOR));
++#ifdef I915_VMBIND_RELEASE
++MODULE_INFO(vm_bind_release, __stringify(I915_VMBIND_RELEASE));
++#endif
+diff --git a/include/uapi/drm/i915_drm.h b/include/uapi/drm/i915_drm.h
+index d3de7d7c049b..867d9039476e 100644
+--- a/include/uapi/drm/i915_drm.h
++++ b/include/uapi/drm/i915_drm.h
+@@ -842,6 +842,17 @@ typedef struct drm_i915_irq_wait {
+  */
+ #define I915_PARAM_VM_BIND_BASE		0x56420000
+ #define I915_PARAM_VM_BIND_VERSION	(I915_PARAM_VM_BIND_BASE + 0)
++/*
++ * VM_BIND ABI version, (major << 16) | minor, or 0 when VM_BIND is
++ * unavailable. Userspace must only use VM_BIND when the major version
++ * matches the one it was built for and the minor version is at least
++ * the one it needs; otherwise it should fall back to execbuf2.
++ */
++#define I915_PARAM_VM_BIND_ABI		(I915_PARAM_VM_BIND_BASE + 1)
++#define I915_VM_BIND_ABI_MAJOR		1
++#define I915_VM_BIND_ABI_MINOR		0
++#define I915_VM_BIND_ABI_VERSION \
++	((I915_VM_BIND_ABI_MAJOR << 16) | I915_VM_BIND_ABI_MINOR)
+ 
+ /* Must be kept compact -- no holes and well documented */
+ 
+
