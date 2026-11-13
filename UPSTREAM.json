@@ -1,0 +1,7 @@
+{
+  "id": "6.18.60-cachyos-lts",
+  "kernelversion": "6.18.60",
+  "flavour": "cachyos-lts",
+  "source": "https://github.com/CachyOS/linux.git@cachyos-6.18.60-1",
+  "imported": "2026-11-13"
+}
