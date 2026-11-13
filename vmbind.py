@@ -737,6 +737,8 @@ def cmd_build(args) -> None:
     log(f"kernel {kver} ({kdir})")
 
     rel_src = find_release_src()
+    if rel_src and args.target and args.target != rel_src[1]["target"]:
+        rel_src = None
     if args.source:
         src = Path(args.source).resolve()
         src = src / "src" if (src / "src/drivers/gpu/drm/i915").is_dir() else src
