@@ -3,9 +3,9 @@
   "line": "7.3",
   "flavour": "cachyos",
   "kernelversion": "7.3.1",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "abi": "1.0",
-  "tooling": "a189852e06e6056eb8c72864af1b1cc00f77372d",
+  "tooling": "d6655a6e545b655df7c695a6edb45b9126adc5d0",
   "stacks": [
     "10-vm_bind/0001-drm-i915-vm-bind-Expose-vm-lookup-function.patch",
     "10-vm_bind/0002-drm-i915-vm-bind-Add-i915-sw-fence-await-reservation.patch",
