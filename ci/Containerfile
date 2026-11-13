@@ -1,0 +1,5 @@
+# Build environment for i915-vmbind: recent clang/gcc and glibc, so the
+# build tools shipped in Arch/CachyOS headers packages run.
+FROM archlinux:latest
+RUN pacman -Syu --noconfirm --needed base-devel clang lld llvm bc cpio git \
+        pahole bpf python zstd xz kmod libelf && pacman -Scc --noconfirm
