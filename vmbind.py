@@ -218,7 +218,7 @@ def materialize(m: dict, t: dict, dest: Path, line: str | None = None) -> Path:
     """Create dest as a scratch git repo holding upstream/<id> with all stacks
     applied. Returns dest."""
     if not in_git_repo():
-        raise Fail("not a git checkout; run `vmbind.py init` first or use a release branch")
+        raise Fail("not a git checkout; clone the repo (main or a release/* branch)")
     tag = f"upstream/{t['id']}"
     if git("rev-parse", "-q", "--verify", f"refs/tags/{tag}", check=False).returncode:
         raise Fail(f"missing tag {tag}; import it first")
@@ -374,13 +374,6 @@ def cmd_import(args) -> None:
                 "imported": time.strftime("%Y-%m-%d")}
         tree = tmp / "tree"
         build_import_tree(m, kroot, tree, meta)
-        if args.archive:
-            Path(args.archive).parent.mkdir(parents=True, exist_ok=True)
-            run(["tar", "--sort=name", "--owner=0", "--group=0", "--numeric-owner",
-                 "--mtime=@0", "-cJf", Path(args.archive).resolve(), "-C", tree, "."],
-                env={"XZ_OPT": "-9 -T0"})
-            log(f"wrote {args.archive}")
-            return
         if git("rev-parse", "-q", "--verify", f"refs/tags/upstream/{tid}", check=False).returncode == 0:
             raise Fail(f"upstream/{tid} already exists; imports are immutable, pick a new --id")
         import_tree_to_tag(tree, tid, f"Import {tid} i915 sources\n\nLinux {kv} ({flavour})\nSource: {meta['source']}\n", env)
@@ -535,6 +528,18 @@ TOOL_PATHS = ["vmbind.py", "vmbind.toml", "README.md", "MAINTAINING.md", "LICENS
               "patches", "tests", "docs", "ci", ".github", ".gitignore"]
 
 
+def previous_tips(branch: str) -> list[str]:
+    """Existing local and origin tips of a release branch, minus ancestors of each other."""
+    tips = []
+    for ref in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
+        r = git("rev-parse", "-q", "--verify", f"{ref}^{{commit}}", check=False)
+        if r.returncode == 0 and r.stdout.strip() not in tips:
+            tips.append(r.stdout.strip())
+    return [a for a in tips
+            if not any(b != a and git("merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+                       for b in tips)]
+
+
 def cmd_release(args) -> None:
     m = manifest()
     env = ident_env(args)
@@ -575,45 +580,18 @@ def cmd_release(args) -> None:
             git("commit", "-q", "--no-verify", "-m", f"Release i915-vmbind {version} for {tid}",
                 cwd=wt, env=env)
             commit = gitout("rev-parse", "HEAD", cwd=wt)
+            prev = previous_tips(branch)
+            if prev:
+                # Keep release/* fast-forward: the new release merges the previous tips,
+                # with the tree of the freshly patched snapshot.
+                parents = [x for c in prev for x in ("-p", c)] + ["-p", commit]
+                commit = gitout("commit-tree", f"{commit}^{{tree}}", *parents, "-m",
+                                f"Release i915-vmbind {version} for {tid}", env=env)
             git("branch", "-f", branch, commit)
             git("tag", "-a", "-m", f"i915-vmbind {version} for {tid}", tag, commit, env=env)
             log(f"{branch} -> {tag}")
         finally:
             git("worktree", "remove", "--force", wt)
-
-
-# ------------------------------------------------------------------------------- init
-
-def cmd_init(args) -> None:
-    env = ident_env(args)
-    if not (ROOT / ".git").exists():
-        git("init", "-q", "-b", "main")
-    try:
-        name = env.get("GIT_AUTHOR_NAME") or gitout("config", "user.name")
-        email = env.get("GIT_AUTHOR_EMAIL") or gitout("config", "user.email")
-    except Fail:
-        raise Fail("set git user.name/user.email, or pass --name/--email")
-    log(f"history will be committed as {name} <{email}>")
-    if git("rev-parse", "-q", "--verify", "HEAD", check=False).returncode:
-        git("add", "-A", env=env)
-        git("commit", "-q", "--no-verify", "-m", "Initial import of i915-vmbind tooling and patch stacks",
-            env=env)
-    archives = sorted((ROOT / "imports").glob("*.tar.xz"))
-    for a in archives:
-        tid = a.name[: -len(".tar.xz")]
-        if git("rev-parse", "-q", "--verify", f"refs/tags/upstream/{tid}", check=False).returncode == 0:
-            continue
-        with tempfile.TemporaryDirectory(prefix="vmbind-init-") as tmp:
-            run(["tar", "-xJf", a, "-C", tmp])
-            meta = json.loads((Path(tmp) / "UPSTREAM.json").read_text())
-            msg = (f"Import {tid} i915 sources\n\nLinux {meta['kernelversion']} ({meta['flavour']})\n"
-                   f"Source: {meta['source']}\n")
-            import_tree_to_tag(Path(tmp), tid, msg, env)
-            log(f"tagged upstream/{tid}")
-    if not args.no_release:
-        args.all, args.targets, args.force = True, [], False
-        cmd_release(args)
-    log("done. Push with: git push -u origin main 'refs/heads/release/*' 'refs/tags/*'")
 
 
 # ------------------------------------------------------------------------------ build
@@ -778,6 +756,8 @@ def cmd_build(args) -> None:
     log(f"kernel {kver} ({kdir})")
 
     rel_src = find_release_src()
+    if rel_src and args.target and args.target != rel_src[1]["target"]:
+        rel_src = None
     if args.source:
         src = Path(args.source).resolve()
         src = src / "src" if (src / "src/drivers/gpu/drm/i915").is_dir() else src
@@ -1245,8 +1225,6 @@ def main() -> None:
         p.add_argument("--name", help="git author/committer name (default: git config)")
         p.add_argument("--email", help="git author/committer email")
 
-    p = sub.add_parser("init", help="create git history: main, upstream/* tags, release/* branches")
-    ident(p); p.add_argument("--no-release", action="store_true"); p.set_defaults(fn=cmd_init)
     p = sub.add_parser("import", help="import i915 sources from a kernel dir/archive/URL/version")
     p.add_argument("kernel", help="directory, .tar.*/.zip, kernel.org version (7.3.5), or git URL")
     p.add_argument("--ref", help="branch/tag when importing from git")
@@ -1255,7 +1233,6 @@ def main() -> None:
     p.add_argument("--line", help="patch line (default: major.minor)")
     p.add_argument("--kver", help="regex of `uname -r` values this target serves")
     p.add_argument("--source-label", help="provenance recorded in UPSTREAM.json")
-    p.add_argument("--archive", help=argparse.SUPPRESS)
     ident(p); p.set_defaults(fn=cmd_import)
     p = sub.add_parser("start", help="apply the stacks onto a target in a worktree, stopping on conflicts")
     p.add_argument("target"); p.add_argument("--line", help="take patches from another line")
