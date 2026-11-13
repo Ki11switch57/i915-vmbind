@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Thu, 1 Dec 2022 19:54:46 +0000
+Subject: [PATCH] drm/i915/vm_bind: Support partially mapped vma resource
+
+As persistent vmas can be partialled mapped to an object,
+remove restriction which require vma resource sg table to
+be just pointer to object's sg table.
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+---
+ drivers/gpu/drm/i915/i915_vma.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index afc192d9931b..2ba53a1bfc20 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -2162,8 +2162,7 @@ static struct dma_fence *__i915_vma_unbind_async(struct i915_vma *vma)
+ 	if (!drm_mm_node_allocated(&vma->node))
+ 		return NULL;
+ 
+-	if (i915_vma_is_pinned(vma) ||
+-	    &vma->obj->mm.rsgt->table != vma->resource->bi.pages)
++	if (i915_vma_is_pinned(vma))
+ 		return ERR_PTR(-EAGAIN);
+ 
+ 	/*
+
