@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Thu, 29 Sep 2022 20:07:15 +0000
+Subject: [PATCH] drm/i915/vm_bind: Expose i915_request_await_bind()
+
+Rename __i915_request_await_bind() as i915_request_await_bind()
+and make it non-static as it will be used in execbuf3 ioctl path.
+
+v2: add documentation
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Reviewed-by: Andi Shyti <andi.shyti@linux.intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+---
+ drivers/gpu/drm/i915/i915_vma.c |  8 +-------
+ drivers/gpu/drm/i915/i915_vma.h | 16 ++++++++++++++++
+ 2 files changed, 17 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index 22aac975bcac..add26732a83d 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -2013,18 +2013,12 @@ void i915_vma_revoke_mmap(struct i915_vma *vma)
+ 		list_del(&vma->obj->userfault_link);
+ }
+ 
+-static int
+-__i915_request_await_bind(struct i915_request *rq, struct i915_vma *vma)
+-{
+-	return __i915_request_await_exclusive(rq, &vma->active);
+-}
+-
+ static int __i915_vma_move_to_active(struct i915_vma *vma, struct i915_request *rq)
+ {
+ 	int err;
+ 
+ 	/* Wait for the vma to be bound before we start! */
+-	err = __i915_request_await_bind(rq, vma);
++	err = i915_request_await_bind(rq, vma);
+ 	if (err)
+ 		return err;
+ 
+diff --git a/drivers/gpu/drm/i915/i915_vma.h b/drivers/gpu/drm/i915/i915_vma.h
+index 6784ae3d3e88..c29fc5fb5bad 100644
+--- a/drivers/gpu/drm/i915/i915_vma.h
++++ b/drivers/gpu/drm/i915/i915_vma.h
+@@ -55,6 +55,22 @@ void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags);
+ #define __EXEC_OBJECT_NO_RESERVE BIT(31)
+ #define __EXEC_OBJECT_NO_REQUEST_AWAIT BIT(30)
+ 
++/**
++ * i915_request_await_bind() - Setup request to wait for a vma bind completion
++ * @rq: the request which should wait
++ * @vma: vma whose binding @rq should wait to complete
++ *
++ * Setup the request @rq to asynchronously wait for @vma bind to complete
++ * before starting execution.
++ *
++ * Returns 0 on success, error code on failure.
++ */
++static inline int
++i915_request_await_bind(struct i915_request *rq, struct i915_vma *vma)
++{
++	return __i915_request_await_exclusive(rq, &vma->active);
++}
++
+ int __must_check _i915_vma_move_to_active(struct i915_vma *vma,
+ 					  struct i915_request *rq,
+ 					  struct dma_fence *fence,
+
