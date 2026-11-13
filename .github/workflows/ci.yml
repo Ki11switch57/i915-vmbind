@@ -14,7 +14,7 @@ jobs:
         with: { fetch-depth: 0 }
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Patch metadata and stacks apply on every target
-        run: python3 vmbind.py check
+        run: python3 vmbind.py check $(python3 -c 'import json; print(json.load(open("RELEASE.json"))["target"])' 2>/dev/null)
 
   targets:
     runs-on: ubuntu-latest
@@ -25,13 +25,18 @@ jobs:
       - id: t
         run: |
           python3 - >> "$GITHUB_OUTPUT" <<'PY'
-          import tomllib, json
+          import json, os, tomllib
           m = tomllib.load(open("vmbind.toml", "rb"))
-          print("ids=" + json.dumps([t["id"] for t in m["targets"] if t.get("headers")]))
+          ids = [t["id"] for t in m["targets"] if t.get("headers")]
+          if os.path.exists("RELEASE.json"):  # release/* branch: only its own target
+              rel = json.load(open("RELEASE.json"))["target"]
+              ids = [i for i in ids if i == rel]
+          print("ids=" + json.dumps(ids))
           PY
 
   build:
     needs: [check, targets]
+    if: needs.targets.outputs.ids != '[]'
     runs-on: ubuntu-latest
     container: archlinux:latest
     strategy:
