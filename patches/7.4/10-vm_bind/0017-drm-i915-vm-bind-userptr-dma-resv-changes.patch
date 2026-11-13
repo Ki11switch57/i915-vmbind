@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Mon, 8 Aug 2022 20:12:42 +0530
+Subject: [PATCH] drm/i915/vm_bind: userptr dma-resv changes
+
+For persistent (vm_bind) vmas of userptr BOs, handle the user
+page pinning by using the i915_gem_object_userptr_submit_init()
+/done() functions
+
+v2: Do not double add vma to vm->userptr_invalidated_list
+v3: Initialize vma->userptr_invalidated_link
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Signed-off-by: Andi Shyti <andi.shyti@linux.intel.com>
+---
+ drivers/gpu/drm/i915/gem/i915_gem_execbuffer3.c    | 82 +++++++++++++++++++++-
+ drivers/gpu/drm/i915/gem/i915_gem_userptr.c        | 22 ++++++
+ drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c | 13 ++++
+ drivers/gpu/drm/i915/gt/intel_gtt.c                |  2 +
+ drivers/gpu/drm/i915/gt/intel_gtt.h                |  4 ++
+ drivers/gpu/drm/i915/i915_vma.c                    |  1 +
+ drivers/gpu/drm/i915/i915_vma_types.h              |  2 +
+ 7 files changed, 124 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_execbuffer3.c b/drivers/gpu/drm/i915/gem/i915_gem_execbuffer3.c
+index 66d77028c4d3..fa7f50ada58a 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_execbuffer3.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_execbuffer3.c
+@@ -20,6 +20,7 @@
+ #include "i915_gem_vm_bind.h"
+ #include "i915_trace.h"
+ 
++#define __EXEC3_USERPTR_USED		BIT_ULL(34)
+ #define __EXEC3_HAS_PIN			BIT_ULL(33)
+ #define __EXEC3_ENGINE_PINNED		BIT_ULL(32)
+ #define __EXEC3_INTERNAL_FLAGS		(~0ull << 32)
+@@ -148,7 +149,22 @@ static void eb_scoop_unbound_vma_all(struct i915_address_space *vm)
+ {
+ 	struct i915_vma *vma, *vn;
+ 
+-	/**
++#ifdef CONFIG_MMU_NOTIFIER
++	/*
++	 * Move all invalidated userptr vmas back into vm_bind_list so that
++	 * they are looked up and revalidated.
++	 */
++	spin_lock(&vm->userptr_invalidated_lock);
++	list_for_each_entry_safe(vma, vn, &vm->userptr_invalidated_list,
++				 userptr_invalidated_link) {
++		list_del_init(&vma->userptr_invalidated_link);
++		if (!list_empty(&vma->vm_bind_link))
++			list_move_tail(&vma->vm_bind_link, &vm->vm_bind_list);
++	}
++	spin_unlock(&vm->userptr_invalidated_lock);
++#endif
++
++	/*
+ 	 * Move all unbound vmas back into vm_bind_list so that they are
+ 	 * revalidated.
+ 	 */
+@@ -161,10 +177,47 @@ static void eb_scoop_unbound_vma_all(struct i915_address_space *vm)
+ 	spin_unlock(&vm->vm_rebind_lock);
+ }
+ 
++static int eb_lookup_persistent_userptr_vmas(struct i915_execbuffer *eb)
++{
++	struct i915_address_space *vm = eb->context->vm;
++	struct i915_vma *last_vma = NULL;
++	struct i915_vma *vma;
++	int err;
++
++	lockdep_assert_held(&vm->vm_bind_lock);
++
++	list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
++		if (!i915_gem_object_is_userptr(vma->obj))
++			continue;
++
++		err = i915_gem_object_userptr_submit_init(vma->obj);
++		if (err)
++			return err;
++
++		/*
++		 * The above submit_init() call does the object unbind and
++		 * hence adds vma into vm_rebind_list. Remove it from that
++		 * list as it is already scooped for revalidation.
++		 */
++		spin_lock(&vm->vm_rebind_lock);
++		if (!list_empty(&vma->vm_rebind_link))
++			list_del_init(&vma->vm_rebind_link);
++		spin_unlock(&vm->vm_rebind_lock);
++
++		last_vma = vma;
++	}
++
++	if (last_vma)
++		eb->args->flags |= __EXEC3_USERPTR_USED;
++
++	return 0;
++}
++
+ static int eb_lookup_vma_all(struct i915_execbuffer *eb)
+ {
+ 	struct i915_vma *vma;
+ 	unsigned int i;
++	int err = 0;
+ 
+ 	for (i = 0; i < eb->num_batches; i++) {
+ 		vma = eb_find_vma(eb->context->vm, eb->batch_addresses[i]);
+@@ -176,6 +229,10 @@ static int eb_lookup_vma_all(struct i915_execbuffer *eb)
+ 
+ 	eb_scoop_unbound_vma_all(eb->context->vm);
+ 
++	err = eb_lookup_persistent_userptr_vmas(eb);
++	if (err)
++		return err;
++
+ 	return 0;
+ }
+ 
+@@ -348,6 +405,27 @@ static int eb_move_to_gpu(struct i915_execbuffer *eb)
+ 		}
+ 	}
+ 
++#ifdef CONFIG_MMU_NOTIFIER
++	/* Check for further userptr invalidations */
++	spin_lock(&vm->userptr_invalidated_lock);
++	if (!list_empty(&vm->userptr_invalidated_list))
++		err = -EAGAIN;
++	spin_unlock(&vm->userptr_invalidated_lock);
++
++	if (!err && (eb->args->flags & __EXEC3_USERPTR_USED)) {
++		list_for_each_entry(vma, &vm->vm_bind_list, vm_bind_link) {
++			if (!i915_gem_object_is_userptr(vma->obj))
++				continue;
++
++			err = i915_gem_object_userptr_submit_done(vma->obj);
++			if (err)
++				break;
++		}
++	}
++#endif
++	if (unlikely(err))
++		goto err_skip;
++
+ 	/* Unconditionally flush any chipset caches (for streaming writes). */
+ 	intel_gt_chipset_flush(eb->gt);
+ 
+@@ -696,7 +774,7 @@ i915_gem_do_execbuffer(struct drm_device *dev,
+ 	if (err)
+ 		goto err_validate;
+ 
+-	/**
++	/*
+ 	 * No object unbinds possible once the objects are locked. So,
+ 	 * check for any unbinds here, which needs to be scooped up.
+ 	 *
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_userptr.c b/drivers/gpu/drm/i915/gem/i915_gem_userptr.c
+index 043095f93ac6..98c18fcf7730 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_userptr.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_userptr.c
+@@ -61,7 +61,29 @@ static bool i915_gem_userptr_invalidate(struct mmu_interval_notifier *mni,
+ 					const struct mmu_notifier_range *range,
+ 					unsigned long cur_seq)
+ {
++	struct drm_i915_gem_object *obj = container_of(mni, struct drm_i915_gem_object, userptr.notifier);
++	struct i915_vma *vma;
++
+ 	mmu_interval_set_seq(mni, cur_seq);
++
++	/**
++	 * Add persistent vmas into userptr_invalidated list for relookup
++	 * and revalidation.
++	 */
++	spin_lock(&obj->vma.lock);
++	list_for_each_entry(vma, &obj->vma.list, obj_link) {
++		if (!i915_vma_is_persistent(vma))
++			continue;
++
++		spin_lock(&vma->vm->userptr_invalidated_lock);
++		if (list_empty(&vma->userptr_invalidated_link) &&
++		    !i915_vma_is_purged(vma))
++			list_add_tail(&vma->userptr_invalidated_link,
++				      &vma->vm->userptr_invalidated_list);
++		spin_unlock(&vma->vm->userptr_invalidated_lock);
++	}
++	spin_unlock(&obj->vma.lock);
++
+ 	return true;
+ }
+ 
+diff --git a/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c b/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
+index 3f4de3aaa05d..3128431a2e86 100644
+--- a/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
++++ b/drivers/gpu/drm/i915/gem/i915_gem_vm_bind_object.c
+@@ -307,6 +307,12 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
+ 		goto put_obj;
+ 	}
+ 
++	if (i915_gem_object_is_userptr(obj)) {
++		ret = i915_gem_object_userptr_submit_init(obj);
++		if (ret)
++			goto put_obj;
++	}
++
+ 	ret = mutex_lock_interruptible(&vm->vm_bind_lock);
+ 	if (ret)
+ 		goto put_obj;
+@@ -336,6 +342,13 @@ static int i915_gem_vm_bind_obj(struct i915_address_space *vm,
+ 		if (ret)
+ 			continue;
+ 
++#ifdef CONFIG_MMU_NOTIFIER
++		if (i915_gem_object_is_userptr(obj)) {
++			ret = i915_gem_object_userptr_submit_done(obj);
++			if (ret)
++				continue;
++		}
++#endif
+ 		/* If out fence is not requested, wait for bind to complete */
+ 		if (!(va->fence.flags & I915_TIMELINE_FENCE_SIGNAL)) {
+ 			ret = i915_vma_wait_for_bind(vma);
+diff --git a/drivers/gpu/drm/i915/gt/intel_gtt.c b/drivers/gpu/drm/i915/gt/intel_gtt.c
+index 2a35bc6ed852..e5aa885055f2 100644
+--- a/drivers/gpu/drm/i915/gt/intel_gtt.c
++++ b/drivers/gpu/drm/i915/gt/intel_gtt.c
+@@ -325,6 +325,8 @@ void i915_address_space_init(struct i915_address_space *vm, int subclass)
+ 	INIT_LIST_HEAD(&vm->non_priv_vm_bind_list);
+ 	INIT_LIST_HEAD(&vm->vm_rebind_list);
+ 	spin_lock_init(&vm->vm_rebind_lock);
++	spin_lock_init(&vm->userptr_invalidated_lock);
++	INIT_LIST_HEAD(&vm->userptr_invalidated_list);
+ }
+ 
+ void *__px_vaddr(struct drm_i915_gem_object *p)
+diff --git a/drivers/gpu/drm/i915/gt/intel_gtt.h b/drivers/gpu/drm/i915/gt/intel_gtt.h
+index 8809c6949565..dff4a5dcd1ff 100644
+--- a/drivers/gpu/drm/i915/gt/intel_gtt.h
++++ b/drivers/gpu/drm/i915/gt/intel_gtt.h
+@@ -292,6 +292,10 @@ struct i915_address_space {
+ 	struct list_head vm_rebind_list;
+ 	/** @vm_rebind_lock: protects vm_rebound_list */
+ 	spinlock_t vm_rebind_lock;
++	/** @userptr_invalidated_list: list of invalidated userptr vmas */
++	struct list_head userptr_invalidated_list;
++	/** @userptr_invalidated_lock: protects userptr_invalidated_list */
++	spinlock_t userptr_invalidated_lock;
+ 	/** @va: tree of persistent vmas */
+ 	struct rb_root_cached va;
+ 	/** @non_priv_vm_bind_list: list of non-private object mappings */
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index add26732a83d..5495a72eb30c 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -282,6 +282,7 @@ vma_create(struct drm_i915_gem_object *obj,
+ 	INIT_LIST_HEAD(&vma->vm_bind_link);
+ 	INIT_LIST_HEAD(&vma->non_priv_vm_bind_link);
+ 	INIT_LIST_HEAD(&vma->vm_rebind_link);
++	INIT_LIST_HEAD(&vma->userptr_invalidated_link);
+ 	return vma;
+ 
+ err_unlock:
+diff --git a/drivers/gpu/drm/i915/i915_vma_types.h b/drivers/gpu/drm/i915/i915_vma_types.h
+index b169eace2cae..ff55d38fdc46 100644
+--- a/drivers/gpu/drm/i915/i915_vma_types.h
++++ b/drivers/gpu/drm/i915/i915_vma_types.h
+@@ -257,6 +257,8 @@ struct i915_vma {
+ 	struct list_head non_priv_vm_bind_link;
+ 	/** @vm_rebind_link: link to vm_rebind_list and protected by vm_rebind_lock */
+ 	struct list_head vm_rebind_link; /* Link in vm_rebind_list */
++	/** @userptr_invalidated_link: link to the vm->userptr_invalidated_list */
++	struct list_head userptr_invalidated_link;
+ 
+ 	/** Timeline fence for vm_bind completion notification */
+ 	struct {
+
