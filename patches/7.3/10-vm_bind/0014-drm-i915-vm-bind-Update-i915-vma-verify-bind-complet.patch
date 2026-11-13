@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Date: Thu, 25 Aug 2022 13:59:07 +0000
+Subject: [PATCH] drm/i915/vm_bind: Update i915_vma_verify_bind_complete()
+
+Ensure i915_vma_verify_bind_complete() handles case where bind
+is not initiated. Also make it non static, add documentation
+and move it out of CONFIG_DRM_I915_DEBUG_GEM.
+
+v2: Fix fence leak
+
+Reviewed-by: Matthew Auld <matthew.auld@intel.com>
+Signed-off-by: Niranjana Vishwanathapura <niranjana.vishwanathapura@intel.com>
+Signed-off-by: Andi Shyti <andi.shyti@linux.intel.com>
+---
+ drivers/gpu/drm/i915/i915_vma.c | 22 ++++++++++++++++------
+ drivers/gpu/drm/i915/i915_vma.h |  1 +
+ 2 files changed, 17 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_vma.c b/drivers/gpu/drm/i915/i915_vma.c
+index c54624bdf9e9..51bf1e1f0274 100644
+--- a/drivers/gpu/drm/i915/i915_vma.c
++++ b/drivers/gpu/drm/i915/i915_vma.c
+@@ -478,12 +478,25 @@ int i915_vma_sync(struct i915_vma *vma)
+ 	return i915_vm_sync(vma->vm);
+ }
+ 
+-#if IS_ENABLED(CONFIG_DRM_I915_DEBUG_GEM)
+-static int i915_vma_verify_bind_complete(struct i915_vma *vma)
++/**
++ * i915_vma_verify_bind_complete() - Check for the bind completion of the vma
++ * @vma: vma to check for bind completion
++ *
++ * As the fence reference is obtained under RCU, no locking is required by
++ * the caller.
++ *
++ * Returns: 0 if the vma bind is completed. Error code otherwise.
++ */
++int i915_vma_verify_bind_complete(struct i915_vma *vma)
+ {
+-	struct dma_fence *fence = i915_active_fence_get(&vma->active.excl);
++	struct dma_fence *fence;
+ 	int err;
+ 
++	/* Ensure vma bind is initiated */
++	if (!i915_vma_is_bound(vma, I915_VMA_BIND_MASK))
++		return -EINVAL;
++
++	fence = i915_active_fence_get(&vma->active.excl);
+ 	if (!fence)
+ 		return 0;
+ 
+@@ -496,9 +509,6 @@ static int i915_vma_verify_bind_complete(struct i915_vma *vma)
+ 
+ 	return err;
+ }
+-#else
+-#define i915_vma_verify_bind_complete(_vma) 0
+-#endif
+ 
+ I915_SELFTEST_EXPORT void
+ i915_vma_resource_init_from_vma(struct i915_vma_resource *vma_res,
+diff --git a/drivers/gpu/drm/i915/i915_vma.h b/drivers/gpu/drm/i915/i915_vma.h
+index 0334f7947ebd..4d3f24ebbc42 100644
+--- a/drivers/gpu/drm/i915/i915_vma.h
++++ b/drivers/gpu/drm/i915/i915_vma.h
+@@ -475,6 +475,7 @@ void i915_vma_make_purgeable(struct i915_vma *vma);
+ 
+ int i915_vma_wait_for_bind(struct i915_vma *vma);
+ int i915_vma_sync(struct i915_vma *vma);
++int i915_vma_verify_bind_complete(struct i915_vma *vma);
+ 
+ /**
+  * i915_vma_get_current_resource - Get the current resource of the vma
+
