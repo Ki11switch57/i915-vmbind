@@ -510,15 +510,16 @@ i915_gem_create_ext_ioctl(struct drm_device *dev, void *data,
 	}
 
 	if (args->flags & I915_GEM_CREATE_EXT_FLAG_NEEDS_CPU_ACCESS) {
+		ret = -EINVAL;
 		if (ext_data.n_placements == 1)
-			return -EINVAL;
+			goto vm_put;
 
 		/*
 		 * We always need to be able to spill to system memory, if we
 		 * can't place in the mappable part of LMEM.
 		 */
 		if (!(ext_data.placement_mask & BIT(INTEL_REGION_SMEM)))
-			return -EINVAL;
+			goto vm_put;
 	} else {
 		if (ext_data.n_placements > 1 ||
 		    ext_data.placements[0]->type != INTEL_MEMORY_SYSTEM)
