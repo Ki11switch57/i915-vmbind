@@ -113,6 +113,11 @@ i915_param_named_unsafe(gsc_firmware_path, charp, 0400,
 #if IS_ENABLED(CONFIG_DRM_I915_GVT)
 i915_param_named(enable_gvt, bool, 0400,
 	"Enable support for Intel GVT-g graphics virtualization host support(default:false)");
+
+i915_param_named(enable_vm_bind, bool, 0400,
+	"Enable the VM_BIND/EXECBUFFER3 uapi on Gen12+ (default: true). "
+	"When disabled, VM_BIND mode VMs cannot be created and "
+	"I915_PARAM_VM_BIND_VERSION reports 0.");
 #endif
 
 #if CONFIG_DRM_I915_REQUEST_TIMEOUT
